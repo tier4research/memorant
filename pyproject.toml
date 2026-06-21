@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smarter-memory-palace"
+version = "0.1.0-alpha.1"
+description = "Local-first memory substrate for agents: claim units, standing state, digest review, correction propagation, and ambient resonance."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Miguel Johnson and Andre"}]
+keywords = ["ai", "agents", "memory", "sqlite", "hermes", "openclaw", "retrieval"]
+classifiers = ["Development Status :: 3 - Alpha", "License :: OSI Approved :: MIT License", "Programming Language :: Python :: 3"]
+dependencies = []
+
+[project.optional-dependencies]
+embeddings = ["sentence-transformers>=3.0", "numpy>=1.24"]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+smp = "smarter_memory_palace.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smarter_memory_palace"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
