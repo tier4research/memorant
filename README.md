@@ -3,221 +3,167 @@
 [![Tests](https://github.com/tier4research/memorant/actions/workflows/tests.yml/badge.svg)](https://github.com/tier4research/memorant/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](RELEASE_NOTES.md)
+[![Status: RC](https://img.shields.io/badge/status-rc-yellow.svg)](RELEASE_NOTES.md)
 
 **Memorant gives your AI agent a long-term memory it can actually trust.**
 
 Most assistants either forget everything between sessions or remember too much —
 hauling around stale, contradictory notes that quietly push answers in the wrong
-direction. Memorant takes a different approach: it stores what your agent learns as
-small, individual facts, each one tagged with where it came from and when it's true.
-When something changes, you correct that single fact instead of rewriting the whole
-history — so the agent's memory stays accurate the longer it runs.
+direction. Memorant stores what your agent learns as individual claims, each tagged
+with provenance, an explicit trust tier, and a temporal validity window. When
+something changes, you correct that single fact — so the agent's memory stays
+accurate the longer it runs.
 
-It's **local-first**: everything lives in a single file on your own machine, with no
-cloud service, no external API on the memory path, and **zero required dependencies**.
-If your agent can call a Python function before it talks to the model, it can use
-Memorant.
+**v1 (release candidate):** adds trust tiers (operator > verified > derived >
+untrusted), field-aware secret redaction, atomic deduplication, FTS5-scored
+retrieval, relation tracking (supersedes/corrects/derived_from), a `doctor --json`
+health contract, and a vendored SQLite steward for safe schema migrations — all
+with zero required dependencies and a single local SQLite file.
 
-Memorant gives an agent three separate ways to work with its memory:
+## v1 at a glance
 
-1. **Standing State** — the agent's reliable "what's true right now" notes: a short,
-   readable summary it carries into every conversation. It never changes silently —
-   updates are proposed, shown to you as a diff, and saved only when you approve them.
-2. **Resonance** — gentle background reminders, quietly added to the model's input as
-   it answers so it stays on track. Built-in safety filters strip out anything internal
-   (raw database queries, tokens, error traces) before it can reach the model.
-3. **Query** — direct, evidence-backed lookups: ask the memory a question and every
-   answer cites its source and a relevance score, so you can always see *why* the agent
-   knows something.
+### Trust tiers
+Every claim gets a trust tier: `operator` (manually curated), `verified`
+(cross-referenced), `derived` (computed from other claims), or `untrusted`
+(default). Resonance auto-injects only operator + verified claims — untrusted
+claims stay available for explicit search but never leak into background context.
 
-Under the hood, memory is recorded as **claim units** — individually addressable
-statements with provenance and a temporal validity window — stored in a single local
-SQLite database with full-text search.
+### Field-aware redaction
+API keys, tokens, passwords, and private keys are redacted with surgical
+precision — only the secret portion is replaced with `[REDACTED:...]`,
+leaving surrounding text intact. Benign terms like "SQL", "debug", and
+"tokenization" are explicitly preserved.
 
-## Why it exists
+### Atomic deduplication
+`INSERT ... ON CONFLICT DO UPDATE` ensures concurrent writes never create
+duplicates. Identical claims increment a reinforcement counter instead of
+creating new rows — safe under multiple readers/writers (WAL mode).
 
-Today, agent memory usually comes in one of two flavors: search over old chat
-transcripts, or a single hand-edited profile file. Both fall apart on the thing that
-matters most for an agent you run for weeks or months — **keeping its memory correct
-as the facts change.** That's the gap Memorant is built around:
+### FTS5 retrieval with scoring
+Composite scoring: FTS5 rank × log-scaled reinforcement bonus. Stable tie-break
+by claim ID. Trust-filtered at query time — you decide the minimum tier per search.
 
-- **Facts, not transcripts** — memory is stored as individual claims, so one can be
-  corrected, replaced, or retired without disturbing everything around it.
-- **Memory with a sense of time** (`valid_from` / `valid_until`) — every fact knows
-  when it became true and when it stopped. You can ask "what was true back then?" and
-  get the right answer; retired facts stop showing up but are never destroyed.
-- **Corrections that ripple** — fix one source fact and anything derived from it
-  updates automatically.
-- **No silent rewrites** — the agent's always-on memory only changes through an
-  explicit, reviewable diff-and-approve step.
-- **Safe by default** — background context is sanitized before it can reach the model.
-- **Yours, on your machine** — one local SQLite file with fast full-text search (FTS5).
-  Nothing leaves your computer.
+### Relation tracking
+`supersedes`, `corrects`, and `derived_from` tables with enforced foreign keys.
+Correction propagation is transactional — invalidate an old claim, create the new
+one, and record the relation in one atomic operation.
 
-## Who it's for
+### Digest governance
+Digest states are explicit `TEXT` enums: `pending`, `promoted`, `rejected`.
+Promotion uses temp-file → flush → atomic replace → state update — no partial writes.
 
-- **Builders of long-running or personal agents** that need memory which survives
-  across sessions and stays trustworthy instead of drifting.
-- **Privacy-conscious and self-hosted setups** — there's no server to send data to;
-  the memory is a file you own and can inspect.
-- **Anyone tired of vector-search guesswork** who wants memory they can read, audit,
-  and correct by hand.
+### Doctor contract
+Every Tier 4 component implements `doctor --json`:
+```json
+{"component": "memorant", "status": "healthy", "checks": [...], "timestamp": "..."}
+```
+Exit codes: 0 = healthy, 1 = degraded, 2 = unhealthy.
+
+### SQLite steward (vendored)
+Dependency-free schema migration manager bundled in `_vendor/`:
+pre-migration integrity check, timestamped backup, ordered transactional
+migrations, canary-based interrupted-migration recovery.
+
+---
 
 ## How Memorant compares
 
-Most agent memory falls into one of a few buckets. Here's how Memorant is different.
+| Capability | Memorant v1 | Holographic (Hermes) | MemPalace (upstream) | Cloud memory |
+|---|---|---|---|---|
+| Runs entirely local | ✓ | ✓ | ✓ | ✗ |
+| Zero required dependencies | ✓ | — | — | ✗ |
+| Trust tiers (operator/verified/derived/untrusted) | ✓ | — | — | — |
+| Field-aware secret redaction | ✓ | — | — | — |
+| Atomic dedup (INSERT ON CONFLICT) | ✓ | — | — | — |
+| Temporal validity (valid_from/valid_until) | ✓ | — | ✓ | — |
+| Queries respect "as of" date | ✓ | — | — | — |
+| Correction propagation (supersedes/corrects/derived_from) | ✓ | — | — | — |
+| Reviewable digests (diff → approve/reject) | ✓ | — | — | — |
+| Doctor --json health contract | ✓ | — | — | — |
+| SQLite steward (safe migrations) | ✓ | — | — | — |
+| FTS5 composite scoring | ✓ | ✓ | ✓ | ✗ |
+| No LLM on the memory path | ✓ | ✓ | ✓ | ✗ |
+| Single-file SQLite | ✓ | ✓ | ✓ | — |
 
-| Capability | Memorant | Holographic (Hermes built-in) | MemPalace (upstream) | Mem0 / Zep (cloud) | Vector search over chat logs |
-|---|---|---|---|---|---|
-| **Runs entirely local** | ✓ | ✓ | ✓ | ✗ | ✓ |
-| **Zero required dependencies** | ✓ | — | — | ✗ | — |
-| **Claim-level memory units** | ✓ | — | — | — | ✗ |
-| **Temporal validity windows** (valid_from / valid_until) | ✓ | — | ✓ | — | ✗ |
-| **Queries respect "as of" date** (what was true then?) | ✓ | — | — | — | ✗ |
-| **Correction propagation** (fix source → derived claims update) | ✓ | — | — | — | ✗ |
-| **Reviewable memory rewrites** (diff → approve/reject) | ✓ | — | — | — | ✗ |
-| **Leak-guarded context injection** (sanitized before model sees it) | ✓ | — | — | — | ✗ |
-| **No LLM on the memory path** (deterministic retrieval) | ✓ | ✓ | ✓ | ✗ | ✓ |
-| **Single-file SQLite** (inspect with any SQLite tool) | ✓ | ✓ | ✓ | ✗ | — |
-
-### Memorant vs. Holographic (Hermes)
-
-Holographic is Hermes Agent's built-in memory provider. It uses HRR phase vectors
-over FTS5 and stores facts in local SQLite. It's a solid default for Hermes users.
-
-Memorant adds several things Holographic doesn't currently do: **temporal validity**
-(every fact knows when it was true), **correction propagation** (fix one fact and
-derived claims update), **reviewable Standing State** (diffs shown before promotion),
-and **leak-guarded resonance** (sanitized before model injection). If you need
-memory that stays correct over weeks or months of active use, Memorant fills the
-governance gap.
-
-### Memorant vs. MemPalace (upstream)
-
-Memorant is directly inspired by the MemPalace ecosystem and borrows its best ideas:
-temporal validity on individual facts, local SQLite storage, and deterministic
-retrieval with no model on the memory path.
-
-Memorant extends that foundation with **claim units** (smaller, individually
-addressable memory atoms), **correction propagation** that cascades from source
-facts to derived claims, **digest governance** with reviewable promote/reject,
-and **agent adapters** that make the memory surface directly usable inside a
-running agent loop. If MemPalace is the filing cabinet, Memorant adds the review
-process, the correction chain, and the direct wire into the agent's ear.
-
-### Memorant vs. cloud memory (Mem0, Zep, etc.)
-
-Cloud memory services handle extraction, dedup, and search for you — but your
-agent's memory lives on someone else's machine. Memorant is intentionally local:
-one file, your disk, no network egress on the memory path. It also keeps retrieval
-deterministic (no LLM deciding what to recall) so you can audit and reproduce
-exactly what the agent remembered and why.
-
-### Memorant vs. vector search over chat transcripts
-
-Searching old chat logs works fine for "what did we talk about last Tuesday." It
-breaks down for "is this fact still true?" because there's no mechanism for
-correction or temporal validity — old wrong statements and new corrections look
-the same to a vector index. Memorant stores memory as structured claims with
-validity windows and correction tracking, so the agent can tell the difference
-between "this was said" and "this is currently true."
+---
 
 ## Install
-
-From the repository:
 
 ```bash
 git clone https://github.com/tier4research/memorant.git
 cd memorant
-python -m pip install .
+pip install .
 ```
 
-For an editable development install, use `python -m pip install -e ".[test]"`.
-
-Retrieval today is deterministic and lexical (FTS5 + token overlap), with no model
-calls on the memory path. A pluggable embedding backend is on the roadmap; see
-**Project status**.
+For development: `pip install -e ".[test]"`.
 
 ## Quick start (CLI)
 
 ```bash
 memorant init --db ./memorant.db
-memorant add "The user prefers concise technical summaries." --db ./memorant.db --source demo
-memorant resonate "How should I answer this task?" --db ./memorant.db
-memorant digest create --db ./memorant.db
-memorant digest list --db ./memorant.db
-memorant digest promote 1 --db ./memorant.db --state ./standing_state.md --yes
+memorant add "The user prefers concise technical summaries." --db ./memorant.db --source demo --trust verified
+memorant search "technical summaries" --db ./memorant.db --min-trust verified
+memorant resonate "How should I answer this?" --db ./memorant.db
+memorant stats --db ./memorant.db
+memorant doctor --json --db ./memorant.db
+memorant backup --db ./memorant.db
 ```
-
-Promotion and rejection require an explicit `--yes` — Standing State never changes by accident.
 
 ## Python usage
 
 ```python
-from pathlib import Path
-from memorant import MemoryPalace
+from memorant import MemorantStore, StoreConfig, TrustPolicy
 
-palace = MemoryPalace(Path("memorant.db"))
-palace.init()
-palace.add_claim("The user prefers direct answers.", source_pointer="manual")
-print(palace.resonate("Answer style?"))
+policy = TrustPolicy(rules=[
+    {"source_type": "manual", "tier": "verified"},
+    {"source_type": "correction", "tier": "operator"},
+])
+
+store = MemorantStore("memorant.db", StoreConfig(trust_policy=policy))
+store.init()
+
+# Add a claim with explicit trust tier
+cid = store.add_claim("The user prefers direct answers.", source_pointer="manual", trust_tier="operator")
+
+# Search with trust filtering
+results = store.search("user preference", min_trust="verified")
+for r in results:
+    print(f"[{r.trust_tier}] {r.score:.3f} | {r.content}")
+
+# Resonance (auto-injects only operator + verified claims)
+context = store.resonate("What style should I use?", session_id="sess-1")
+
+# Correct a claim
+new_id = store.correct_claim(cid, "The user prefers thorough, evidence-backed answers.")
+
+# Health check
+store.doctor(json_output=True)
 ```
 
 ## Using it with your agent
 
-Wiring it in is deliberately simple: Memorant runs in the step just before your agent
-calls its model, and hands back a small, sanitized block of context. Two ready-made
-adapters ship in the box:
+Memorant runs in the step just before your agent calls its model, and hands back
+a small, sanitized block of context. The Hermes adapter is one line:
 
-- **Hermes** — `memorant.adapters.hermes.pre_llm_call_context(...)` returns a
-  `{"context": ...}` packet suitable for a `pre_llm_call` plugin hook. A runnable
-  example plugin lives in `examples/hermes_plugin/`.
-- **OpenClaw-style agents** — `memorant.adapters.openclaw.build_context_packet(...)`
-  returns a plain string for generic context assembly.
+```python
+from memorant.adapters.hermes import pre_llm_call_context
 
-Both adapters emit **internal-only** context and never expose raw SQL, debug output,
-or embedding data. The adapters are deliberately tiny — if your framework isn't one
-of these, copying one is a few lines.
+result = pre_llm_call_context(user_message, session_id="sess-abc")
+# → {"context": "[MEMORANT_RESONANCE]\n- ..."}
+```
 
-**For local-first / self-hosted agents:** there's no service to run, no external API
-on the memory path, and no network egress. The store is a file you own, retrieval is
-deterministic, and the same database works from the CLI, the Python API, and an agent
-hook simultaneously (WAL mode).
-
-## Safety & privacy
-
-- The package ships **no memory data**. Runtime databases are created by you.
-- Resonance output is sanitized and intended for model context, not direct display to users.
-- The `resonance_log` table retains recent turn context locally for debugging; it
-  stays on your machine in your SQLite file.
-
-### A note on storage encryption
-
-The local SQLite database is stored as a plaintext file. If you discuss sensitive
-topics with your agent — health information, finances, private correspondence —
-those facts will be written to the database in the clear.
-
-**The first and most important defense is full-disk encryption** (BitLocker on
-Windows, FileVault on macOS, LUKS on Linux). With full-disk encryption enabled,
-the database file is ciphertext whenever the machine is powered off or locked.
-Full-disk encryption is built into every modern operating system and protects
-against the most common real-world threat: someone gaining physical access to a
-powered-off or locked device.
-
-Application-level SQLite encryption (e.g., SQLCipher) is on the roadmap as an
-optional feature. It would add defense-in-depth for the narrower scenario where
-the database file is exfiltrated separately from the machine's keyring — but it
-cannot protect against an attacker who already has access to a running, unlocked
-system. We recommend full-disk encryption regardless of any future app-level
-encryption support, and we commit to documenting the threat model honestly as
-the project evolves.
+A complete Hermes plugin example ships in `examples/hermes_plugin/`.
 
 ## Project status
 
-Alpha (`v0.1.0-alpha.x`). The schema, retrieval, correction propagation, digest
-review, temporal filtering, and leak guards are tested. The optional embedding backend
-and a full LLM-based claim-extraction pipeline are not yet implemented. APIs may change.
+Release candidate (`v1.0.0-rc.1`). Trust tiers, field-aware redaction, atomic
+dedup, FTS5 scoring, relation tracking, digest governance, doctor contract, and
+SQLite steward are all implemented and tested (62 tests, 90%+ coverage target on
+migration/correction/trust/redaction paths). APIs may still see minor adjustments
+before stable v1.0.0.
+
+Deferred to v1.1: full embedding backend, advanced policy configuration, polished
+repair/uninstall workflows.
 
 ## Lineage & credit
 
