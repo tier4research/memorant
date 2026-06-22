@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tier4research/agent-integrity-specs/schemas/agent-event.schema.json",
+  "title": "Agent Integrity Event",
+  "description": "Canonical event envelope for agent integrity telemetry across Tier 4 components.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "timestamp",
+    "session_id",
+    "trace_id",
+    "component",
+    "component_version",
+    "event_type",
+    "severity"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$",
+      "description": "Semantic version of this event schema. Additive-only within major 1. Consumers MUST reject major > 1."
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "UUID v4 unique event identifier."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of event creation."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Agent session identifier."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Correlation trace identifier spanning multiple events and components."
+    },
+    "component": {
+      "type": "string",
+      "description": "Originating component name (e.g., 'memorant', 'expectation-ledger', 'context-tuner')."
+    },
+    "component_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-rc\\.\\d+)?$",
+      "description": "Semantic version of the originating component."
+    },
+    "event_type": {
+      "type": "string",
+      "description": "Component-specific event type (e.g., 'claim.recalled', 'breaker.opened', 'compression.completed')."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warning", "error", "critical"],
+      "description": "Event severity level."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Component-specific event payload. Structure defined by event_type."
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Optional correlation identifier linking related events within a session."
+    },
+    "parent_event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Optional parent event identifier for causal chains."
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "description": "Optional key-value tags for indexing and filtering."
+    }
+  },
+  "additionalProperties": {
+    "not": {
+      "pattern": "^[a-z_]+$",
+      "description": "Reject unknown properties with unrecognized prefixes — treat as field reserved for future major."
+    }
+  }
+}
