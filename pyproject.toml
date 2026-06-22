@@ -28,7 +28,7 @@ test = ["pytest>=8.0"]
 memorant = "memorant.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/memorant"]
+packages = ["src/memorant", "src/expectation_ledger", "src/context_tuner"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
