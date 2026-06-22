@@ -153,9 +153,19 @@ def chunk_messages(
         recent_msgs: Last N non-system messages (kept intact)
         old_msgs: Everything else (candidates for compression)
     """
+    if keep_last_n < 0:
+        keep_last_n = 0
+
     non_system = [m for m in messages if isinstance(m, dict) and m.get("role") != "system"]
 
-    if len(non_system) <= keep_last_n:
+    if len(non_system) <= keep_last_n or keep_last_n == 0:
+        # keep_last_n=0 means no messages are kept intact — all non-system are old
+        if keep_last_n == 0 and non_system:
+            return (
+                [m for m in messages if isinstance(m, dict) and m.get("role") == "system"],
+                [],
+                list(non_system),
+            )
         return (
             [m for m in messages if isinstance(m, dict) and m.get("role") == "system"],
             non_system,

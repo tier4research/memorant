@@ -173,29 +173,37 @@ class ExpectationLedger:
     # ── Initialization & migration ───────────────────────────
 
     def init(self) -> list[str]:
-        """Initialize database schema and run migrations."""
-        existed = self.db_path.exists()
-        existing_version = self._steward.user_version if existed else 0
+        """Initialize database schema and run migrations.
 
-        with self.connect() as db:
-            for sql in SCHEMA_V1.values():
-                db.execute(sql)
-            db.commit()
-
+        Detects empty vs legacy by table inspection (expectations table).
+        """
         target = max(MIGRATIONS) if MIGRATIONS else 0
-        self._steward.initialize(target)
 
-        for version, sql in sorted(MIGRATIONS.items()):
-            self._steward.add_migration(version, sql)
+        is_legacy = False
+        if self.db_path.exists():
+            try:
+                with self.connect() as db:
+                    row = db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='expectations'"
+                    ).fetchone()
+                    is_legacy = row is not None
+            except Exception:
+                is_legacy = False
 
-        if existed and existing_version > 0 and existing_version < target:
-            # Existing DB with prior steward version — run incremental migrations
+        if is_legacy:
+            self._steward.initialize(target)
+            for version, sql in sorted(MIGRATIONS.items()):
+                self._steward.add_migration(version, sql)
             self._steward.migrate()
         else:
-            # Fresh DB or pre-created empty file — bump directly
             with self.connect() as db:
+                for sql in SCHEMA_V1.values():
+                    db.execute(sql)
                 db.execute(f"PRAGMA user_version = {target}")
                 db.commit()
+            self._steward.initialize(target)
+            for version, sql in sorted(MIGRATIONS.items()):
+                self._steward.add_migration(version, sql)
 
         if self._flight:
             self._flight.record(AgentEvent(
@@ -644,25 +652,20 @@ class ExpectationLedger:
         """
         self.init()
         with self.connect() as db:
-            # Check if this expectation was already recorded for this run
-            existing = db.execute(
-                "SELECT passed FROM run_expectations WHERE run_id = ? AND expectation_id = ?",
-                (run_id, expectation_id),
-            ).fetchone()
-
             db.execute("""
                 INSERT OR REPLACE INTO run_expectations
                     (run_id, expectation_id, passed, checked_at)
                 VALUES (?, ?, ?, datetime('now'))
             """, (run_id, expectation_id, 1 if passed else 0))
 
-            # Only increment if this is a NEW pass for this expectation
-            if passed and (existing is None or not existing["passed"]):
-                db.execute(
-                    "UPDATE runs SET expectations_checked = expectations_checked + 1 "
-                    "WHERE id = ?",
-                    (run_id,),
-                )
+            # Derive expectations_checked from the join table — always correct
+            db.execute(
+                "UPDATE runs SET expectations_checked = ("
+                "  SELECT COUNT(*) FROM run_expectations "
+                "  WHERE run_id = ? AND passed = 1"
+                ") WHERE id = ?",
+                (run_id, run_id),
+            )
 
             db.commit()
 

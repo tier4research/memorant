@@ -629,3 +629,61 @@ class TestStewardIntegration:
         tuner.init()
         version = tuner.migrate()
         assert version >= 0
+
+
+# ── Regression Tests — Audit 2026-06-22 (round 3) ──────────────
+
+class TestInitEmptyDB:
+    """Pre-created empty databases must initialize correctly."""
+
+    def test_precreated_empty_db_initializes(self, tmp_path):
+        """path.touch() then init() must work (not crash on migrations)."""
+        from memorant import MemorantStore
+        path = tmp_path / "empty.db"
+        path.touch()
+        store = MemorantStore(path)
+        tables = store.init()
+        assert "claim_units" in tables
+
+    def test_fresh_db_initializes(self, tmp_path):
+        """Brand new DB initializes from schema."""
+        from memorant import MemorantStore
+        store = MemorantStore(tmp_path / "fresh.db")
+        tables = store.init()
+        assert "claim_units" in tables
+
+
+class TestMaxTokensEnforcement:
+    """Compression must respect max_tokens budget."""
+
+    def test_compression_within_budget_flag(self, tmp_path):
+        """CompressedMessages.within_budget reports when budget exceeded."""
+        from context_tuner import ContextTuner, TunerConfig
+
+        # Generate messages that will compress but exceed a tight budget
+        msgs = [{"role": "system", "content": "You are helpful."}]
+        for i in range(20):
+            msgs.append({"role": "user", "content": f"Message {i}: " + "data " * 30})
+            msgs.append({"role": "assistant", "content": f"Response {i}: " + "info " * 30})
+
+        config = TunerConfig(db_path=tmp_path / "tuner.db", max_tokens=10)
+        tuner = ContextTuner(config=config)
+        result = tuner.compress(msgs)
+
+        # With max_tokens=10 and 20 verbose turns, budget should be exceeded
+        assert result.within_budget is False
+        assert result.compressed_tokens > 10
+
+    def test_keep_last_n_zero(self, tmp_path):
+        """keep_last_n=0 should compress all non-system messages."""
+        from context_tuner import compress_messages
+
+        msgs = [{"role": "system", "content": "System prompt."}]
+        for i in range(10):
+            msgs.append({"role": "user", "content": f"User query {i}: " + "details " * 20})
+            msgs.append({"role": "assistant", "content": f"Answer {i}: " + "explanation " * 20})
+
+        compressed, orig, comp = compress_messages(msgs, max_tokens=1, keep_last_n=0)
+        # With keep_last_n=0, no recent messages kept → more compression
+        # With verbose messages, compression should reduce tokens
+        assert comp < orig

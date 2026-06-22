@@ -39,6 +39,7 @@ from .schema import SCHEMA_V1, MIGRATIONS
 RESONANCE_DEADLINE_MS = 100
 RESONANCE_COOLDOWN_MS = 5000
 MAX_RESONANCE_LINES = 3
+COMPONENT_VERSION = "1.0.0-rc.1"
 
 # ── Helpers ────────────────────────────────────────────────────────
 
@@ -149,39 +150,49 @@ class MemorantStore:
     def init(self) -> list[str]:
         """Initialize database schema and run migrations.
 
-        For new databases: SCHEMA_V1 contains the full schema, steward version
-        is bumped to the target directly (no migration needed).
-        For existing v0.1 databases: steward runs incremental migrations.
+        Detects empty vs legacy databases by table inspection:
+        - No file → create schema fresh, set target version
+        - File exists, no primary table → pre-created empty → create schema fresh
+        - File exists, primary table present → legacy DB → skip schema, run migrations
+        - Already at target version → no-op
+        - Newer than target → error (no downgrades)
         """
-        # Check if database already existed
-        existed = self.db_path.exists()
-        existing_version = self._steward.user_version if existed else 0
-
-        with self.connect() as db:
-            for sql in SCHEMA_V1.values():
-                db.execute(sql)
-            db.commit()
-
-        # Set up steward
         target = max(MIGRATIONS) if MIGRATIONS else 0
-        self._steward.initialize(target)
 
-        for version, sql in sorted(MIGRATIONS.items()):
-            self._steward.add_migration(version, sql)
+        # Determine if this is a legacy database by checking for the primary table
+        is_legacy = False
+        if self.db_path.exists():
+            try:
+                with self.connect() as db:
+                    row = db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='claim_units'"
+                    ).fetchone()
+                    is_legacy = row is not None
+            except Exception:
+                # Can't open DB (encrypted, corrupt) — treat as fresh
+                is_legacy = False
 
-        if existed and existing_version > 0 and existing_version < target:
-            # Existing DB with prior steward version — run incremental migrations
+        if is_legacy:
+            # Legacy DB: don't touch schema, run migrations through steward
+            self._steward.initialize(target)
+            for version, sql in sorted(MIGRATIONS.items()):
+                self._steward.add_migration(version, sql)
             self._steward.migrate()
         else:
-            # Fresh DB or pre-created empty file — bump directly
+            # Fresh DB (or pre-created empty file): create schema, set version
             with self.connect() as db:
+                for sql in SCHEMA_V1.values():
+                    db.execute(sql)
                 db.execute(f"PRAGMA user_version = {target}")
                 db.commit()
+            self._steward.initialize(target)
+            for version, sql in sorted(MIGRATIONS.items()):
+                self._steward.add_migration(version, sql)
 
         if self._flight:
             self._flight.record(AgentEvent(
                 component="memorant",
-                component_version="1.0.0",
+                component_version=COMPONENT_VERSION,
                 event_type="store.initialized",
                 severity="info",
                 session_id="",
@@ -287,7 +298,7 @@ class MemorantStore:
         if self._flight:
             self._flight.record(AgentEvent(
                 component="memorant",
-                component_version="1.0.0",
+                component_version=COMPONENT_VERSION,
                 event_type="claim.added",
                 severity="info",
                 session_id="",
@@ -356,7 +367,7 @@ class MemorantStore:
         if self._flight:
             self._flight.record(AgentEvent(
                 component="memorant",
-                component_version="1.0.0",
+                component_version=COMPONENT_VERSION,
                 event_type="claim.searched",
                 severity="info",
                 session_id="",
@@ -414,7 +425,7 @@ class MemorantStore:
             if self._flight:
                 self._flight.record(AgentEvent(
                     component="memorant",
-                    component_version="1.0.0",
+                    component_version=COMPONENT_VERSION,
                     event_type="resonance.timeout",
                     severity="warning",
                     session_id=session_id,
@@ -465,7 +476,7 @@ class MemorantStore:
         if self._flight:
             self._flight.record(AgentEvent(
                 component="memorant",
-                component_version="1.0.0",
+                component_version=COMPONENT_VERSION,
                 event_type="claim.recalled",
                 severity="info",
                 session_id=session_id,
@@ -501,7 +512,7 @@ class MemorantStore:
         if self._flight:
             self._flight.record(AgentEvent(
                 component="memorant",
-                component_version="1.0.0",
+                component_version=COMPONENT_VERSION,
                 event_type="claim.invalidated",
                 severity="warning",
                 session_id="",
@@ -571,7 +582,7 @@ class MemorantStore:
         if self._flight:
             self._flight.record(AgentEvent(
                 component="memorant",
-                component_version="1.0.0",
+                component_version=COMPONENT_VERSION,
                 event_type="claim.superseded",
                 severity="info",
                 session_id="",
@@ -749,7 +760,7 @@ class MemorantStore:
         if self._flight:
             self._flight.record(AgentEvent(
                 component="memorant",
-                component_version="1.0.0",
+                component_version=COMPONENT_VERSION,
                 event_type="digest.promoted",
                 severity="info",
                 session_id="",

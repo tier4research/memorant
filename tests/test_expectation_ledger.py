@@ -429,3 +429,53 @@ class TestDataTypes:
         run = AgentRun(id="r1")
         with pytest.raises(Exception):
             run.status = "completed"  # type: ignore[misc]
+
+
+# ── Regression Tests — Audit 2026-06-22 (round 3) ──────────────
+
+class TestCounterDrift:
+    """check_expectation counters must not drift on state transitions."""
+
+    def test_repeat_pass_does_not_double_count(self, ledger):
+        """Checking the same expectation twice (pass) = count 1."""
+        eid = ledger.add_expectation("Idempotent check.")
+        rid = ledger.start_run()
+        ledger.check_expectation(rid, eid, passed=True)
+        ledger.check_expectation(rid, eid, passed=True)
+        run = ledger.get_run(rid)
+        assert run.expectations_checked == 1
+
+    def test_pass_fail_pass_transition(self, ledger):
+        """pass → fail → pass should produce count 1, not 2."""
+        eid = ledger.add_expectation("State machine check.")
+        rid = ledger.start_run()
+        ledger.check_expectation(rid, eid, passed=True)
+        ledger.check_expectation(rid, eid, passed=False)
+        ledger.check_expectation(rid, eid, passed=True)
+        run = ledger.get_run(rid)
+        assert run.expectations_checked == 1
+
+    def test_only_passes_counted(self, ledger):
+        """Only passed checks increment the counter."""
+        eid = ledger.add_expectation("Counting check.")
+        rid = ledger.start_run()
+        ledger.check_expectation(rid, eid, passed=False)
+        ledger.check_expectation(rid, eid, passed=False)
+        run = ledger.get_run(rid)
+        assert run.expectations_checked == 0
+
+
+class TestFTSOperators:
+    """FTS5 operators in queries must be treated as literal terms."""
+
+    def test_or_operator(self, ledger):
+        """Query 'alpha OR beta' should not crash."""
+        ledger.add_expectation("alpha OR beta test.", trust_tier="verified")
+        results = ledger.search("alpha OR beta")
+        assert isinstance(results, list)
+
+    def test_not_operator(self, ledger):
+        """Query 'NOT deployed' should not crash."""
+        ledger.add_expectation("deployment testing.", trust_tier="verified")
+        results = ledger.search("NOT deployed")
+        assert isinstance(results, list)

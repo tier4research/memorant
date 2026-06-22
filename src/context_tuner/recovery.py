@@ -103,29 +103,37 @@ class RecoveryStore:
     # ── Initialization & migration ───────────────────────────
 
     def init(self) -> list[str]:
-        """Initialize database schema and run migrations."""
-        existed = self.db_path.exists()
-        existing_version = self._steward.user_version if existed else 0
+        """Initialize database schema and run migrations.
 
-        with self.connect() as db:
-            for sql in SCHEMA_V1.values():
-                db.execute(sql)
-            db.commit()
-
+        Detects empty vs legacy by table inspection (recovery_sessions table).
+        """
         target = max(MIGRATIONS) if MIGRATIONS else 0
-        self._steward.initialize(target)
 
-        for version, sql in sorted(MIGRATIONS.items()):
-            self._steward.add_migration(version, sql)
+        is_legacy = False
+        if self.db_path.exists():
+            try:
+                with self.connect() as db:
+                    row = db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='recovery_sessions'"
+                    ).fetchone()
+                    is_legacy = row is not None
+            except Exception:
+                is_legacy = False
 
-        if existed and existing_version > 0 and existing_version < target:
-            # Existing DB with prior steward version — run incremental migrations
+        if is_legacy:
+            self._steward.initialize(target)
+            for version, sql in sorted(MIGRATIONS.items()):
+                self._steward.add_migration(version, sql)
             self._steward.migrate()
         else:
-            # Fresh DB or pre-created empty file — bump directly
             with self.connect() as db:
+                for sql in SCHEMA_V1.values():
+                    db.execute(sql)
                 db.execute(f"PRAGMA user_version = {target}")
                 db.commit()
+            self._steward.initialize(target)
+            for version, sql in sorted(MIGRATIONS.items()):
+                self._steward.add_migration(version, sql)
 
         return list(SCHEMA_V1)
 
