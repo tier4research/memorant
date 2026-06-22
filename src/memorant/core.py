@@ -169,11 +169,11 @@ class MemorantStore:
         for version, sql in sorted(MIGRATIONS.items()):
             self._steward.add_migration(version, sql)
 
-        if existed and existing_version < target:
-            # Existing DB: run incremental migrations
+        if existed and existing_version > 0 and existing_version < target:
+            # Existing DB with prior steward version — run incremental migrations
             self._steward.migrate()
-        elif not existed:
-            # Fresh DB: SCHEMA_V1 already has everything — bump directly
+        else:
+            # Fresh DB or pre-created empty file — bump directly
             with self.connect() as db:
                 db.execute(f"PRAGMA user_version = {target}")
                 db.commit()
@@ -220,7 +220,7 @@ class MemorantStore:
             trust_tier = assign_trust(self.config.trust_policy, source_type, source_pointer)
 
         with self.connect() as db:
-            # Atomic dedup: if content_hash exists, increment reinforcement
+            # Atomic dedup: only the primary INSERT can trigger duplicate detection
             try:
                 db.execute("""
                     INSERT INTO claim_units (id, content, content_hash, fact_refs,
@@ -234,10 +234,6 @@ class MemorantStore:
                     valid_from,
                     json.dumps(list(emotional_markers or [])),
                 ))
-                db.execute(
-                    "INSERT INTO claim_fts (id, content) VALUES (?, ?)",
-                    (cid, content),
-                )
             except sqlite3.IntegrityError:
                 # Duplicate content_hash — increment existing
                 existing = db.execute(
@@ -253,6 +249,12 @@ class MemorantStore:
                     cid = existing["id"]
                 else:
                     raise  # Not a duplicate — re-raise the original IntegrityError
+            else:
+                # Only insert into FTS if primary insert succeeded
+                db.execute(
+                    "INSERT INTO claim_fts (id, content) VALUES (?, ?)",
+                    (cid, content),
+                )
 
             # Record derived_from relations
             if derived_from_ids:

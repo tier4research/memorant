@@ -30,7 +30,7 @@ from .schema import SCHEMA_V1, MIGRATIONS
 
 # ── Constants ──────────────────────────────────────────────────────
 
-COMPONENT_VERSION = "1.0.0"
+COMPONENT_VERSION = "1.0.0-rc.1"
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -188,9 +188,11 @@ class ExpectationLedger:
         for version, sql in sorted(MIGRATIONS.items()):
             self._steward.add_migration(version, sql)
 
-        if existed and existing_version < target:
+        if existed and existing_version > 0 and existing_version < target:
+            # Existing DB with prior steward version — run incremental migrations
             self._steward.migrate()
-        elif not existed:
+        else:
+            # Fresh DB or pre-created empty file — bump directly
             with self.connect() as db:
                 db.execute(f"PRAGMA user_version = {target}")
                 db.commit()
@@ -239,6 +241,7 @@ class ExpectationLedger:
             )
 
         with self.connect() as db:
+            # Atomic dedup: only the primary INSERT can trigger duplicate detection
             try:
                 db.execute("""
                     INSERT INTO expectations (
@@ -251,10 +254,6 @@ class ExpectationLedger:
                     parent_contract_id,
                     json.dumps(metadata or {}),
                 ))
-                db.execute(
-                    "INSERT INTO expectations_fts (id, content) VALUES (?, ?)",
-                    (eid, content),
-                )
             except sqlite3.IntegrityError:
                 # Duplicate content_hash — reactivate if superseded
                 existing = db.execute(
@@ -271,6 +270,12 @@ class ExpectationLedger:
                         )
                 else:
                     raise
+            else:
+                # Only insert into FTS if primary insert succeeded
+                db.execute(
+                    "INSERT INTO expectations_fts (id, content) VALUES (?, ?)",
+                    (eid, content),
+                )
 
             db.commit()
 
@@ -415,7 +420,9 @@ class ExpectationLedger:
             return []
 
         terms = [t for t in re.findall(r'\w+', query) if len(t) > 1]
-        fts_query = " OR ".join(terms) if terms else '""'
+        # Quote each term so uppercase FTS5 operators (OR, NOT, NEAR, AND)
+        # are treated as literal search terms rather than FTS5 syntax
+        fts_query = " OR ".join(f'"{t}"' for t in terms) if terms else '""'
 
         trust_ranks = {"operator": 0, "verified": 1, "derived": 2, "untrusted": 3}
 
@@ -631,19 +638,26 @@ class ExpectationLedger:
     ) -> None:
         """Record that an expectation was checked during a run.
 
-        Only passed checks increment expectations_checked on the run.
-        Failed checks are recorded in run_expectations but do not
-        increment the counter (they surface via violation recording).
+        Uses INSERT OR REPLACE for the join row. The run's
+        expectations_checked counter is only incremented on first
+        pass — repeat checks of the same expectation don't double-count.
         """
         self.init()
         with self.connect() as db:
+            # Check if this expectation was already recorded for this run
+            existing = db.execute(
+                "SELECT passed FROM run_expectations WHERE run_id = ? AND expectation_id = ?",
+                (run_id, expectation_id),
+            ).fetchone()
+
             db.execute("""
                 INSERT OR REPLACE INTO run_expectations
                     (run_id, expectation_id, passed, checked_at)
                 VALUES (?, ?, ?, datetime('now'))
             """, (run_id, expectation_id, 1 if passed else 0))
 
-            if passed:
+            # Only increment if this is a NEW pass for this expectation
+            if passed and (existing is None or not existing["passed"]):
                 db.execute(
                     "UPDATE runs SET expectations_checked = expectations_checked + 1 "
                     "WHERE id = ?",

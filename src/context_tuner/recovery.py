@@ -26,6 +26,20 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _safe_json_load(data: str | None, default: Any = None) -> Any:
+    """Load JSON, returning default on any parse error.
+
+    Isolates malformed rows so one corrupt record doesn't break
+    list/search operations.
+    """
+    if not data:
+        return default
+    try:
+        return json.loads(data)
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
 # ── Data types ───────────────────────────────────────────────────
 
 @dataclass
@@ -104,9 +118,11 @@ class RecoveryStore:
         for version, sql in sorted(MIGRATIONS.items()):
             self._steward.add_migration(version, sql)
 
-        if existed and existing_version < target:
+        if existed and existing_version > 0 and existing_version < target:
+            # Existing DB with prior steward version — run incremental migrations
             self._steward.migrate()
-        elif not existed:
+        else:
+            # Fresh DB or pre-created empty file — bump directly
             with self.connect() as db:
                 db.execute(f"PRAGMA user_version = {target}")
                 db.commit()
@@ -182,14 +198,14 @@ class RecoveryStore:
 
         return RecoveryRecord(
             id=row["id"],
-            original_messages=json.loads(row["original_messages"]),
-            compressed_messages=json.loads(row["compressed_messages"]),
+            original_messages=_safe_json_load(row["original_messages"]),
+            compressed_messages=_safe_json_load(row["compressed_messages"]),
             original_tokens=row["original_tokens"],
             compressed_tokens=row["compressed_tokens"],
             compression_ratio=row["compression_ratio"],
             created_at=row["created_at"],
             session_metadata=(
-                json.loads(row["session_metadata"])
+                _safe_json_load(row["session_metadata"])
                 if row["session_metadata"]
                 else None
             ),
@@ -226,14 +242,14 @@ class RecoveryStore:
         return [
             RecoveryRecord(
                 id=row["id"],
-                original_messages=json.loads(row["original_messages"]),
-                compressed_messages=json.loads(row["compressed_messages"]),
+                original_messages=_safe_json_load(row["original_messages"], default=[]),
+                compressed_messages=_safe_json_load(row["compressed_messages"], default=[]),
                 original_tokens=row["original_tokens"],
                 compressed_tokens=row["compressed_tokens"],
                 compression_ratio=row["compression_ratio"],
                 created_at=row["created_at"],
                 session_metadata=(
-                    json.loads(row["session_metadata"])
+                    _safe_json_load(row["session_metadata"])
                     if row["session_metadata"]
                     else None
                 ),
@@ -249,7 +265,9 @@ class RecoveryStore:
             return []
 
         terms = [t for t in re.findall(r"\w+", query) if len(t) > 1]
-        fts_query = " OR ".join(terms) if terms else '""'
+        # Quote each term so uppercase FTS5 operators (OR, NOT, NEAR, AND)
+        # are treated as literal search terms rather than FTS5 syntax
+        fts_query = " OR ".join(f'"{t}"' for t in terms) if terms else '""'
 
         with self.connect() as db:
             rows = db.execute(
@@ -263,14 +281,14 @@ class RecoveryStore:
         return [
             RecoveryRecord(
                 id=row["id"],
-                original_messages=json.loads(row["original_messages"]),
-                compressed_messages=json.loads(row["compressed_messages"]),
+                original_messages=_safe_json_load(row["original_messages"], default=[]),
+                compressed_messages=_safe_json_load(row["compressed_messages"], default=[]),
                 original_tokens=row["original_tokens"],
                 compressed_tokens=row["compressed_tokens"],
                 compression_ratio=row["compression_ratio"],
                 created_at=row["created_at"],
                 session_metadata=(
-                    json.loads(row["session_metadata"])
+                    _safe_json_load(row["session_metadata"])
                     if row["session_metadata"]
                     else None
                 ),

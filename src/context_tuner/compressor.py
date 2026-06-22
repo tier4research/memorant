@@ -36,13 +36,28 @@ def count_tokens(text: str) -> int:
 
 
 def count_message_tokens(messages: list[dict[str, Any]]) -> int:
-    """Count approximate tokens across all messages."""
+    """Count approximate tokens across all messages.
+
+    Handles string content, list-valued content (OpenAI multimodal),
+    and non-dict messages gracefully.
+    """
     total = 0
     for msg in messages:
-        content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
-        total += count_tokens(content)
-        # Add overhead for role marker (~4 tokens per message)
-        total += 4
+        if not isinstance(msg, dict):
+            total += count_tokens(str(msg))
+            total += 4
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # OpenAI multimodal: extract text parts
+            text = " ".join(
+                part.get("text", "") for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+            total += count_tokens(text)
+        else:
+            total += count_tokens(str(content) if content else "")
+        total += 4  # Role marker overhead
     return total
 
 
@@ -131,21 +146,27 @@ def chunk_messages(
     messages: list[dict[str, Any]],
     keep_last_n: int = 3,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split messages into three groups:
+    """Split messages into three groups, preserving original ordering.
 
     Returns:
-        system_msgs: System messages (always preserved)
+        system_msgs: System messages (always preserved, in original order)
         recent_msgs: Last N non-system messages (kept intact)
         old_msgs: Everything else (candidates for compression)
     """
-    system_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
     non_system = [m for m in messages if isinstance(m, dict) and m.get("role") != "system"]
 
     if len(non_system) <= keep_last_n:
-        return system_msgs, non_system, []
+        return (
+            [m for m in messages if isinstance(m, dict) and m.get("role") == "system"],
+            non_system,
+            [],
+        )
 
     recent_msgs = non_system[-keep_last_n:]
     old_msgs = non_system[:-keep_last_n]
+
+    # System messages in their original positions
+    system_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
 
     return system_msgs, recent_msgs, old_msgs
 
@@ -277,8 +298,8 @@ def compress_messages(
     target_compressed_tokens = int(original_tokens * compression_ratio)
     # Reserve tokens for system + recent messages
     system_recent_tokens = count_message_tokens(system_msgs + recent_msgs)
-    available_for_old = max(100, target_compressed_tokens - system_recent_tokens)
-    max_chars_per_chunk = max(100, (available_for_old // max(1, len(chunks))) * 4)
+    available_for_old = max(0, target_compressed_tokens - system_recent_tokens)
+    max_chars_per_chunk = max(50, (available_for_old // max(1, len(chunks))) * 4)
 
     # Summarize each chunk
     summarized_msgs: list[dict[str, Any]] = []

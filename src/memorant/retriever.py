@@ -80,10 +80,11 @@ class FTSRetriever:
     def _fts_query(self, query: str) -> str:
         """Build a safe FTS5 query string.
 
-        Uses simple OR of bare terms — FTS5 handles tokenization and stemming.
+        Quotes each term so uppercase FTS5 operators (OR, NOT, NEAR, AND)
+        are treated as literal search terms rather than FTS5 syntax.
         """
         terms = [t for t in re.findall(r'\w+', query) if len(t) > 1]
-        return " OR ".join(terms) if terms else '""'
+        return " OR ".join(f'"{t}"' for t in terms) if terms else '""'
 
     def search(
         self,

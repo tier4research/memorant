@@ -34,7 +34,7 @@ from .schema import SCHEMA_V1, MIGRATIONS
 
 # ── Constants ──────────────────────────────────────────────────
 
-COMPONENT_VERSION = "1.0.0"
+COMPONENT_VERSION = "1.0.0-rc.1"
 DEFAULT_MAX_TOKENS = 8000
 DEFAULT_COMPRESSION_RATIO = 0.5
 DEFAULT_KEEP_LAST_N = 3
@@ -51,6 +51,7 @@ class CompressedMessages:
     original_tokens: int
     compressed_tokens: int
     compression_ratio: float
+    within_budget: bool = True  # False when compression couldn't meet max_tokens
 
 
 @dataclass
@@ -183,6 +184,7 @@ class ContextTuner:
         )
 
         actual_ratio = compressed_tokens / max(1, original_tokens)
+        within_budget = compressed_tokens <= max_tokens
 
         # Save recovery record
         recovery_id = self._recovery.save(
@@ -200,6 +202,7 @@ class ContextTuner:
             original_tokens=original_tokens,
             compressed_tokens=compressed_tokens,
             compression_ratio=actual_ratio,
+            within_budget=within_budget,
         )
 
     # ── Decompression / rollback ─────────────────────────────
