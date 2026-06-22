@@ -484,3 +484,73 @@ class TestStoreConfig:
         store = MemorantStore(tmp_path / "custom.db", config=config)
         cid = store.add_claim("Custom trust.", source_pointer="any", source_type="custom")
         assert store.get_claim(cid).trust_tier == "verified"
+
+
+# ── Encryption ─────────────────────────────────────────────────
+
+class TestEncryption:
+    """SQLCipher encryption (optional, requires memorant[encryption])."""
+
+    def test_encryption_key_without_sqlcipher_raises(self, tmp_path):
+        """Setting encryption_key without sqlcipher3 installed raises ImportError."""
+        config = StoreConfig(encryption_key="test-key")
+        store = MemorantStore(tmp_path / "enc.db", config=config)
+
+        # Should raise because sqlcipher3 is not installed in test env
+        with pytest.raises(ImportError, match="encryption_key requires"):
+            store.add_claim("test", source_pointer="test")
+
+    def test_no_encryption_key_uses_standard_sqlite(self, tmp_path):
+        """Default config (no key) uses standard sqlite3 without error."""
+        store = MemorantStore(tmp_path / "plain.db")
+        cid = store.add_claim("Plain text claim.", source_pointer="test")
+        assert store.get_claim(cid) is not None
+
+    def test_wrong_key_fails_closed(self, tmp_path):
+        """A database created with one key cannot be opened with another."""
+        pytest.importorskip("sqlcipher3")
+
+        # Create with key A
+        config_a = StoreConfig(encryption_key="correct-key")
+        store_a = MemorantStore(tmp_path / "enc.db", config=config_a)
+        cid = store_a.add_claim("Secret claim.", source_pointer="test")
+        assert store_a.get_claim(cid) is not None
+
+        # Try to open with key B — must fail
+        config_b = StoreConfig(encryption_key="wrong-key")
+        store_b = MemorantStore(tmp_path / "enc.db", config=config_b)
+        with pytest.raises(Exception):  # sqlcipher3 raises on wrong key
+            store_b.add_claim("Should fail.", source_pointer="test")
+
+    def test_correct_key_roundtrips(self, tmp_path):
+        """Data written with a key can be read back with the same key."""
+        sqlcipher3 = pytest.importorskip("sqlcipher3")
+
+        config = StoreConfig(encryption_key="roundtrip-key")
+        store = MemorantStore(tmp_path / "enc.db", config=config)
+        cid = store.add_claim("Encrypted claim.", source_pointer="test")
+        claim = store.get_claim(cid)
+        assert claim is not None
+        assert claim.content == "Encrypted claim."
+
+    def test_encrypted_search(self, tmp_path):
+        """Search works on encrypted databases."""
+        pytest.importorskip("sqlcipher3")
+
+        config = StoreConfig(encryption_key="search-key")
+        store = MemorantStore(tmp_path / "enc.db", config=config)
+        store.add_claim("Find me in encrypted storage.", source_pointer="test", trust_tier="verified")
+        results = store.search("encrypted", min_trust="verified")
+        assert len(results) > 0
+        assert "encrypted" in results[0].content.lower()
+
+    def test_encrypted_resonance(self, tmp_path):
+        """Resonance works on encrypted databases."""
+        pytest.importorskip("sqlcipher3")
+
+        config = StoreConfig(encryption_key="res-key")
+        store = MemorantStore(tmp_path / "enc.db", config=config)
+        store.add_claim("Encrypted resonance test claim.", source_pointer="test", trust_tier="verified")
+        block = store.resonate("encrypted resonance")
+        assert "resonance" in block.lower()
+        assert "[MEMORANT_RESONANCE]" in block

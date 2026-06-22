@@ -80,6 +80,7 @@ class StoreConfig:
     resonance_floor: float = 0.12
     flight_recorder: FlightRecorder | None = None
     retention_mode: str = "full"  # full | minimal | none
+    encryption_key: str | None = None  # SQLCipher encryption key (requires memorant[encryption])
 
 
 # ── MemorantStore (v1 primary API) ─────────────────────────────────
@@ -107,14 +108,36 @@ class MemorantStore:
         self.db_path = Path(self.config.db_path)
 
         # Steward for migration management
-        self._steward = Steward(self.db_path)
+        self._steward = Steward(self.db_path, encryption_key=self.config.encryption_key)
         self._flight = self.config.flight_recorder
 
     # ── Connection management ────────────────────────────────
 
     def connect(self) -> sqlite3.Connection:
+        """Open a database connection, with optional SQLCipher encryption.
+
+        If encryption_key is set in config, uses sqlcipher3 for encrypted
+        storage. Without it, uses standard Python sqlite3.
+
+        Raises ImportError if encryption_key is set but sqlcipher3 is not
+        installed. Install with: pip install memorant[encryption]
+        """
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(str(self.db_path))
+
+        key = self.config.encryption_key
+        if key:
+            try:
+                import sqlcipher3
+            except ImportError:
+                raise ImportError(
+                    "encryption_key requires the sqlcipher3 package. "
+                    "Install with: pip install memorant[encryption]"
+                )
+            db = sqlcipher3.connect(str(self.db_path))
+            db.execute(f"PRAGMA key = '{key}'")
+        else:
+            db = sqlite3.connect(str(self.db_path))
+
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA foreign_keys=ON")

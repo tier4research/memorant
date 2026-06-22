@@ -21,6 +21,7 @@ dependencies = []
 
 [project.optional-dependencies]
 embeddings = ["sentence-transformers>=3.0", "numpy>=1.24"]
+encryption = ["sqlcipher3"]
 test = ["pytest>=8.0"]
 
 [project.scripts]

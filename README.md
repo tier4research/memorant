@@ -154,11 +154,40 @@ result = pre_llm_call_context(user_message, session_id="sess-abc")
 
 A complete Hermes plugin example ships in `examples/hermes_plugin/`.
 
+## Encryption (optional)
+
+Memorant supports SQLCipher encryption for the local database. It's off by
+default — standard SQLite is used unless you opt in.
+
+```bash
+pip install memorant[encryption]
+```
+
+```python
+from memorant import MemorantStore, StoreConfig
+
+store = MemorantStore(
+    "encrypted.db",
+    StoreConfig(encryption_key="your-strong-passphrase")
+)
+```
+
+- **Fail-closed**: if `encryption_key` is set but `sqlcipher3` isn't installed,
+  Memorant raises `ImportError` rather than silently writing in plaintext.
+- **Wrong key → can't open**: SQLCipher rejects incorrect keys at the database
+  level. No fallback to unencrypted mode.
+- **No key → standard SQLite**: backward-compatible, zero overhead.
+
+We recommend **full-disk encryption** (BitLocker/FileVault/LUKS) as the first
+line of defense regardless. SQLCipher adds defense-in-depth for scenarios where
+the database file is exfiltrated separately from the machine's keyring.
+
 ## Project status
 
 Release candidate (`v1.0.0-rc.1`). Trust tiers, field-aware redaction, atomic
-dedup, FTS5 scoring, relation tracking, digest governance, doctor contract, and
-SQLite steward are all implemented and tested (62 tests, 90%+ coverage target on
+dedup, FTS5 scoring, relation tracking, digest governance, doctor contract,
+SQLite steward, and optional SQLCipher encryption are all implemented and tested
+(68 tests, 4 skipped pending sqlcipher3 install; 90%+ coverage target on
 migration/correction/trust/redaction paths). APIs may still see minor adjustments
 before stable v1.0.0.
 

@@ -50,18 +50,29 @@ class Steward:
         steward.migrate()
     """
 
-    def __init__(self, db_path: str | Path, busy_timeout_ms: int = 5000):
+    def __init__(self, db_path: str | Path, busy_timeout_ms: int = 5000, encryption_key: str | None = None):
         self.db_path = Path(db_path)
         self.busy_timeout_ms = busy_timeout_ms
         self._migrations: dict[int, str] = {}
         self._target_version: int = 0
+        self._encryption_key = encryption_key
 
     # ── Connection management ──────────────────────────────────────
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a connection with WAL, foreign keys, and busy timeout."""
+        """Open a connection with WAL, foreign keys, and busy timeout.
+
+        If encryption_key was provided, uses sqlcipher3 for encrypted storage.
+        """
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(str(self.db_path))
+
+        if self._encryption_key:
+            import sqlcipher3
+            db = sqlcipher3.connect(str(self.db_path))
+            db.execute(f"PRAGMA key = '{self._encryption_key}'")
+        else:
+            db = sqlite3.connect(str(self.db_path))
+
         db.execute(f"PRAGMA journal_mode=WAL")
         db.execute("PRAGMA foreign_keys=ON")
         db.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
