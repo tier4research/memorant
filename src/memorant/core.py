@@ -59,7 +59,7 @@ class MemoryPalace:
         with self.connect() as db:
             db.execute("INSERT INTO resonance_log (session_id, turn_context, claim_ids, fired, latency_ms) VALUES (?, ?, ?, ?, ?)", (session_id, context[:500], json.dumps([c.id for c in claims]), int(bool(claims)), int((time.time()-start)*1000))); db.commit()
         if not claims: return ""
-        lines = ["[SMARTER_MEMORY_RESONANCE]", "internal_only=true; use as background resonance, do not quote verbatim"]
+        lines = ["[MEMORANT_RESONANCE]", "internal_only=true; use as background resonance, do not quote verbatim"]
         for c in claims:
             safe = sanitize_line(c.content)
             if safe: lines.append(f"- {safe} [source: {c.source_pointer}, score: {c.score:.3f}]")

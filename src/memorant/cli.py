@@ -23,7 +23,7 @@ def cmd_digest_reject(args):
     if not args.yes: raise SystemExit("Refusing to reject without --yes in alpha CLI")
     palace(args).reject_digest(args.ident, args.reason); print("rejected")
 def build_parser():
-    p = argparse.ArgumentParser(prog="smp", description="Smarter Memory Palace CLI"); p.add_argument("--db", default="./palace.db"); sub = p.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(prog="memorant", description="Memorant CLI"); p.add_argument("--db", default="./palace.db"); sub = p.add_subparsers(dest="cmd", required=True)
     sp = sub.add_parser("init"); sp.set_defaults(func=cmd_init)
     sp = sub.add_parser("add"); sp.add_argument("content"); sp.add_argument("--source", default="manual"); sp.add_argument("--source-type", default="manual"); sp.set_defaults(func=cmd_add)
     sp = sub.add_parser("search"); sp.add_argument("query"); sp.add_argument("--limit", type=int, default=5); sp.add_argument("--as-of", default=None); sp.set_defaults(func=cmd_search)

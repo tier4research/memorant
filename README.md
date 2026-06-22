@@ -1,65 +1,114 @@
-# Smarter Memory Palace
+# Memorant
 
-**Smarter Memory Palace** is a local-first memory substrate for AI agents. It turns raw memory into reviewable, temporally valid claim units with three usable surfaces:
+**Memorant** is a local-first memory substrate for AI agents. Instead of storing raw
+chat logs and hoping vector search surfaces the right thing, it records memory as
+**claim units** — small, individually addressable statements with provenance and a
+temporal validity window — and exposes them through three deliberately separate
+surfaces:
 
-1. **Standing State** — a compact digest of what should stay true across turns.
-2. **Associative Surface** — ambient resonance cues that can be injected into an agent's per-turn context without exposing raw memory internals.
-3. **Deep Query** — explicit evidence-backed lookup for direct memory questions.
+1. **Standing State** — a compact, human-reviewable digest of what should stay true
+   across turns. Rewrites go through a create → diff → promote/reject review step, so
+   the agent's always-on memory never changes silently.
+2. **Resonance** — sanitized, ambient cues injected into an agent's per-turn context.
+   Internal-only by design: leak guards strip SQL, embeddings, tokens, and tracebacks
+   before anything reaches the model.
+3. **Query** — explicit, evidence-backed lookup for direct memory questions, with each
+   result carrying its source pointer and score.
 
-It is designed for Hermes Agent, OpenClaw-style agents, and any Python agent that can add context before an LLM call.
+It runs on a single local SQLite file, has **zero required dependencies**, and is
+built to be called from any Python agent that can add context before an LLM call.
 
-This is an **alpha release artifact** extracted from Andre's private smarter memory palace. Private data and personal paths are intentionally absent.
+## Why it exists
 
-## Why this exists
+Most agent memory is one of two things: vector search over chat transcripts, or a
+hand-curated profile file. Both struggle with the part that matters most in
+long-running agents — keeping memory *correct over time*. Memorant focuses on that gap:
 
-Most agent memory is either vector search over chat logs or manually curated profile facts. Smarter Memory Palace adds missing governance primitives: claim-level memory units, temporal validity, correction propagation, digest review before Standing State rewrites, ambient resonance with leak guards, local SQLite storage, and adapter boundaries for Hermes/OpenClaw.
+- **Claim-level units**, not opaque document chunks — so a single fact can be
+  corrected, superseded, or invalidated without rewriting everything around it.
+- **Temporal validity** (`valid_from` / `valid_until`) — queries can ask "what was
+  true as of this date," and retracted facts drop out of retrieval without being deleted.
+- **Correction propagation** — invalidating a source fact cascades to the claims
+  derived from it.
+- **Reviewable Standing State** — persistent memory is rewritten through an explicit,
+  diffable promotion step, not in place.
+- **Leak-guarded resonance** — ambient context is sanitized before injection.
+- **Local-first** — one SQLite file with full-text search (FTS5). Nothing leaves the machine.
 
-## Install locally
+## Install
 
 ```bash
 pip install -e .
 ```
 
-Optional embedding backend:
+Retrieval today is deterministic and lexical (FTS5 + token overlap), with no model
+calls on the memory path. A pluggable embedding backend is on the roadmap; see
+**Project status**.
+
+## Quick start (CLI)
 
 ```bash
-pip install -e '.[embeddings]'
+memorant init --db ./memorant.db
+memorant add "The user prefers concise technical summaries." --db ./memorant.db --source demo
+memorant resonate "How should I answer this task?" --db ./memorant.db
+memorant digest create --db ./memorant.db
+memorant digest list --db ./memorant.db
+memorant digest promote 1 --db ./memorant.db --state ./standing_state.md --yes
 ```
 
-## Quick start
-
-```bash
-smp init --db ./demo-palace.db
-smp add "The user prefers concise technical summaries." --db ./demo-palace.db --source demo
-smp resonate "How should I answer this task?" --db ./demo-palace.db
-smp digest create --db ./demo-palace.db --state ./standing_state.md
-smp digest list --db ./demo-palace.db
-smp digest promote 1 --db ./demo-palace.db --state ./standing_state.md --yes
-```
+Promotion and rejection require an explicit `--yes` — Standing State never changes by accident.
 
 ## Python usage
 
 ```python
 from pathlib import Path
-from smarter_memory_palace import MemoryPalace
+from memorant import MemoryPalace
 
-palace = MemoryPalace(Path("palace.db"))
+palace = MemoryPalace(Path("memorant.db"))
 palace.init()
-claim_id = palace.add_claim("The user prefers direct answers.", source_pointer="manual")
+palace.add_claim("The user prefers direct answers.", source_pointer="manual")
 print(palace.resonate("Answer style?"))
 ```
 
-## Agent adapters
+## Using it with your agent
 
-- `smarter_memory_palace.adapters.hermes` exposes a `pre_llm_call_context(...)` helper suitable for a Hermes plugin hook.
-- `smarter_memory_palace.adapters.openclaw` exposes a generic `build_context_packet(...)` helper for OpenClaw-style context assembly.
+Memorant sits in the pre-LLM step of an agent loop and returns a small, sanitized
+context string. Two thin adapters ship in the box:
 
-Both adapters emit internal-only context and avoid raw SQL/debug/embedding data.
+- **Hermes** — `memorant.adapters.hermes.pre_llm_call_context(...)` returns a
+  `{"context": ...}` packet suitable for a `pre_llm_call` plugin hook. A runnable
+  example plugin lives in `examples/hermes_plugin/`.
+- **OpenClaw-style agents** — `memorant.adapters.openclaw.build_context_packet(...)`
+  returns a plain string for generic context assembly.
 
-## Safety / privacy defaults
+Both adapters emit **internal-only** context and never expose raw SQL, debug output,
+or embedding data. The adapters are deliberately tiny — if your framework isn't one
+of these, copying one is a few lines.
 
-The package does **not** ship memory data. Runtime databases are user-created. Resonance output is sanitized and intended for model context, not direct display.
+**For local-first / self-hosted agents:** there's no service to run, no external API
+on the memory path, and no network egress. The store is a file you own, retrieval is
+deterministic, and the same database works from the CLI, the Python API, and an agent
+hook simultaneously (WAL mode).
 
-## License and lineage
+## Safety & privacy
 
-MIT licensed. See `NOTICE.md` for original Memory Palace / MemPalace lineage and credit notes.
+- The package ships **no memory data**. Runtime databases are created by you.
+- Resonance output is sanitized and intended for model context, not direct display to users.
+- The `resonance_log` table retains recent turn context locally for debugging; it
+  stays on your machine in your SQLite file.
+
+## Project status
+
+Alpha (`v0.1.0-alpha.x`). The schema, retrieval, correction propagation, digest
+review, temporal filtering, and leak guards are tested. The optional embedding backend
+and a full LLM-based claim-extraction pipeline are not yet implemented. APIs may change.
+
+## Lineage & credit
+
+Memorant is an independent implementation, but its design is directly indebted to the
+open-source memory-palace ecosystem for AI agents. See `NOTICE.md` for the upstream
+projects credited and the specific concepts borrowed.
+
+## License
+
+MIT. See `LICENSE` and `NOTICE.md`.

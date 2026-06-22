@@ -1,7 +1,7 @@
 manifest_version: 1
-name: smarter-memory-palace
+name: memorant
 version: 0.1.0-alpha.1
-description: Inject Smarter Memory Palace resonance cues through pre_llm_call.
+description: Inject Memorant resonance cues through pre_llm_call.
 kind: standalone
 hooks:
   - pre_llm_call

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from smarter_memory_palace import MemoryPalace
+from memorant import MemoryPalace
 
 def pre_llm_call_context(user_message: str, *, db_path: str | Path, session_id: str = "") -> dict[str, str] | None:
     if not user_message.strip(): return None

@@ -1,11 +1,11 @@
 from pathlib import Path
-from smarter_memory_palace import MemoryPalace
+from memorant import MemoryPalace
 
 def test_add_search_resonate(tmp_path: Path):
     p = MemoryPalace(tmp_path / "p.db"); p.init(); p.add_claim("The user prefers concise technical summaries.", source_pointer="manual")
     assert p.search("technical summaries")
     block = p.resonate("Please make this a concise technical summary.")
-    assert "[SMARTER_MEMORY_RESONANCE]" in block and "internal_only=true" in block
+    assert "[MEMORANT_RESONANCE]" in block and "internal_only=true" in block
 
 def test_content_hash_dedup(tmp_path: Path):
     p = MemoryPalace(tmp_path / "p.db"); a = p.add_claim("Same fact", source_pointer="a"); b = p.add_claim(" same   fact ", source_pointer="b"); assert a == b

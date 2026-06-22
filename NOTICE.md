@@ -1,12 +1,27 @@
 # Notices and lineage
 
-Smarter Memory Palace began as an experimental upgrade layer inspired by the open-source MemPalace / Memory Palace ecosystem, especially the idea of a persistent, searchable, auditable memory palace for AI agents.
+Memorant is an independent implementation, but its design is directly indebted to the
+open-source memory-palace ecosystem for AI agents — in particular the idea of a
+persistent, searchable, auditable memory store, and temporal validity windows that
+mark facts as ended rather than deleting them.
 
-Original projects to credit when publishing:
+Projects credited:
 
-- MemPalace: https://github.com/mempalace/mempalace
-- AGI-is-going-to-arrive/Memory-Palace: https://github.com/AGI-is-going-to-arrive/Memory-Palace
+- **MemPalace** — https://github.com/mempalace/mempalace — for deterministic,
+  no-LLM-on-the-memory-path retrieval and a temporal knowledge graph in local SQLite
+  with per-fact validity windows.
+- **AGI-is-going-to-arrive/Memory-Palace** — https://github.com/AGI-is-going-to-arrive/Memory-Palace
+  — for the searchable, auditable cross-session store and write-time governance.
 
-This repository is packaged as a clean, sanitized release artifact for the Smarter Memory Palace architecture used in Andre's private deployment. It does not include private memory data, personal facts, diary content, API keys, or machine-specific runtime databases.
+These GitHub repositories are the only sources this project credits; other similarly
+named domains and packages are unaffiliated.
 
-If future work copies code directly from an upstream memory-palace repository, preserve that upstream project's license headers and license terms in the copied files. This alpha package currently credits lineage/inspiration and ships a sanitized implementation of the upgraded architecture: claim units, validity windows, Standing State, digest promotion/review, correction propagation, and agent adapters.
+This repository is a clean, sanitized release artifact. It does not include private
+memory data, personal facts, diary content, API keys, or machine-specific runtime
+databases.
+
+If future work copies code directly from an upstream memory-palace repository,
+preserve that upstream project's license headers and license terms in the copied
+files. Memorant currently credits lineage/inspiration and ships a sanitized,
+independent implementation of the architecture: claim units, validity windows,
+Standing State, digest promotion/review, correction propagation, and agent adapters.

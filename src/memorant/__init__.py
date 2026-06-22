@@ -1,4 +1,4 @@
-"""Smarter Memory Palace public package."""
+"""Memorant public package."""
 from .core import MemoryPalace
 
 __all__ = ["MemoryPalace"]
