@@ -52,10 +52,11 @@ class FTSRetriever:
     """FTS5-based retriever with composite scoring.
 
     Scoring formula:
-        score = relevance * reinforcement_bonus * recency_bonus
+        score = normalized_relevance * reinforcement_bonus * recency_bonus
 
     Where:
-    - relevance: 1/(1+abs(fts_rank)) — better FTS5 matches get scores closer to 1
+    - normalized_relevance: FTS5 rank normalized to [0,1] within the result set.
+      More negative rank → relevance closer to 1.0 (best match = 1.0, worst = 0.0).
     - reinforcement_bonus: 1 + log(1 + reinforcement_count) * 0.3
     - recency_bonus: 1.0 for today, decaying linearly to 0.5 over 90 days
 
@@ -134,23 +135,37 @@ class FTSRetriever:
                 sql += ",".join("?" for _ in allowed) + ")"
                 params.extend(allowed)
 
-            sql += " ORDER BY f.rank DESC LIMIT 50"
+            sql += " ORDER BY f.rank LIMIT 50"
 
             rows = db.execute(sql, params).fetchall()
 
         if not rows:
             return []
 
-        # Compute composite scores.
-        # FTS5 rank values are negative — better matches are closer to 0.
-        # We convert to a positive relevance score where higher = better.
+        # Compute composite scores with result-set-relative normalization.
+        # FTS5 rank: negative values, more negative = better match.
+        # Since rank magnitude varies with corpus size, we normalize within
+        # the result set to [0, 1] so the resonance floor works consistently.
         now = datetime.now(timezone.utc)
+
+        ranks = [r["fts_rank"] for r in rows]
+        if ranks:
+            min_rank = min(ranks)  # most negative = best match
+            max_rank = max(ranks)  # least negative = worst match
+            rank_range = max_rank - min_rank
+        else:
+            min_rank = max_rank = 0.0
+            rank_range = 0.0
+
         results = []
         for r in rows:
-            # Convert FTS5 rank to relevance: 1/(1+abs(rank)) → [0,1]
-            # Better matches (rank closer to 0) → relevance closer to 1
-            rank_value = r["fts_rank"] or -1
-            relevance = 1.0 / (1.0 + abs(rank_value))
+            rank_value = float(r["fts_rank"] or 0.0)
+
+            # Normalize to [0, 1]: best match → 1.0, worst match → 0.0
+            if rank_range > 0:
+                relevance = (rank_value - max_rank) / (min_rank - max_rank)
+            else:
+                relevance = 1.0  # Only one result or all identical ranks
 
             # Reinforcement bonus: log scaling, rewards reinforced claims
             reinf = r["reinforcement_count"] or 0
@@ -174,7 +189,7 @@ class FTSRetriever:
             results.append(SearchResult(
                 claim_id=r["id"],
                 content=r["content"],
-                score=round(score, 6),
+                score=score,
                 source_pointer=r["source_pointer"],
                 reinforcement_count=reinf,
                 trust_tier=r["trust_tier"],
