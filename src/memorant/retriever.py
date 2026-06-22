@@ -12,6 +12,7 @@ import math
 import re
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -51,21 +52,27 @@ class FTSRetriever:
     """FTS5-based retriever with composite scoring.
 
     Scoring formula:
-        score = fts_rank * (1 + log(1 + reinforcement_count)) * recency_bonus
+        score = relevance * reinforcement_bonus * recency_bonus
 
     Where:
-    - fts_rank: BM25 rank from FTS5 (-bm25rank normalized, higher = better)
-    - reinforcement_count: number of times this claim has been reinforced
-    - recency_bonus: recency decay factor (1.0 for today, decaying to 0.5 over 90 days)
+    - relevance: 1/(1+abs(fts_rank)) — better FTS5 matches get scores closer to 1
+    - reinforcement_bonus: 1 + log(1 + reinforcement_count) * 0.3
+    - recency_bonus: 1.0 for today, decaying linearly to 0.5 over 90 days
 
-    Tie-break: stable claim ID sort.
+    Tie-break: composite score → reinforcement_count → claim ID.
     """
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, encryption_key: str | None = None):
         self.db_path = Path(db_path)
+        self._encryption_key = encryption_key
 
     def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(str(self.db_path))
+        if self._encryption_key:
+            import sqlcipher3
+            db = sqlcipher3.connect(str(self.db_path))
+            db.execute(f"PRAGMA key = '{self._encryption_key}'")
+        else:
+            db = sqlite3.connect(str(self.db_path))
         db.row_factory = sqlite3.Row
         return db
 
@@ -127,7 +134,7 @@ class FTSRetriever:
                 sql += ",".join("?" for _ in allowed) + ")"
                 params.extend(allowed)
 
-            sql += " ORDER BY f.rank LIMIT 50"
+            sql += " ORDER BY f.rank DESC LIMIT 50"
 
             rows = db.execute(sql, params).fetchall()
 
@@ -137,6 +144,7 @@ class FTSRetriever:
         # Compute composite scores.
         # FTS5 rank values are negative — better matches are closer to 0.
         # We convert to a positive relevance score where higher = better.
+        now = datetime.now(timezone.utc)
         results = []
         for r in rows:
             # Convert FTS5 rank to relevance: 1/(1+abs(rank)) → [0,1]
@@ -148,8 +156,20 @@ class FTSRetriever:
             reinf = r["reinforcement_count"] or 0
             reinf_bonus = 1 + math.log(1 + reinf) * 0.3
 
-            # Composite score ensures positive values
-            score = relevance * reinf_bonus
+            # Recency bonus: 1.0 for today, decays to 0.5 over 90 days
+            updated_at = r["updated_at"]
+            if updated_at:
+                try:
+                    updated = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                    days_ago = max(0, (now - updated).days)
+                    recency_bonus = 1.0 - (0.5 * min(days_ago / 90.0, 1.0))
+                except (ValueError, TypeError):
+                    recency_bonus = 1.0
+            else:
+                recency_bonus = 1.0
+
+            # Composite score
+            score = relevance * reinf_bonus * recency_bonus
 
             results.append(SearchResult(
                 claim_id=r["id"],

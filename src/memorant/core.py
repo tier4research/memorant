@@ -251,6 +251,8 @@ class MemorantStore:
                         (existing["id"],),
                     )
                     cid = existing["id"]
+                else:
+                    raise  # Not a duplicate — re-raise the original IntegrityError
 
             # Record derived_from relations
             if derived_from_ids:
@@ -328,7 +330,7 @@ class MemorantStore:
         Stable tie-break by claim ID.
         """
         self.init()
-        retriever = FTSRetriever(self.db_path)
+        retriever = FTSRetriever(self.db_path, encryption_key=self.config.encryption_key)
 
         results = retriever.search(
             query,
@@ -395,16 +397,17 @@ class MemorantStore:
 
         elapsed_ms = int((time.time() - start) * 1000)
 
-        # Check deadline
-        if elapsed_ms > deadline and not claims:
+        # Check deadline — enforce regardless of whether results were returned
+        if elapsed_ms > deadline:
             # Degraded: log and return empty
-            with self.connect() as db:
-                db.execute(
-                    "INSERT INTO resonance_log (session_id, turn_context, claim_ids, "
-                    "fired, latency_ms, retention_mode) VALUES (?, ?, ?, 0, ?, ?)",
-                    (session_id, context[:500], "[]", elapsed_ms, self.config.retention_mode),
-                )
-                db.commit()
+            if self.config.retention_mode != "none":
+                with self.connect() as db:
+                    db.execute(
+                        "INSERT INTO resonance_log (session_id, turn_context, claim_ids, "
+                        "fired, latency_ms, retention_mode) VALUES (?, ?, ?, 0, ?, ?)",
+                        (session_id, context[:500], "[]", elapsed_ms, self.config.retention_mode),
+                    )
+                    db.commit()
 
             if self._flight:
                 self._flight.record(AgentEvent(
@@ -430,10 +433,11 @@ class MemorantStore:
             "internal_only=true; use as background resonance, do not quote verbatim",
         ]
         for c in claims[:MAX_RESONANCE_LINES]:
-            safe = redact_content(c.content)
-            if safe.strip():
+            safe_content = redact_content(c.content)
+            safe_source = redact_content(c.source_pointer) if c.source_pointer else c.source_pointer
+            if safe_content.strip():
                 lines.append(
-                    f"- {safe} [source: {c.source_pointer}, score: {c.score:.3f}]"
+                    f"- {safe_content} [source: {safe_source}, score: {c.score:.3f}]"
                 )
 
         result = "\n".join(lines)
