@@ -8,11 +8,18 @@ version = "0.1.0-alpha.1"
 description = "Local-first memory substrate for agents: claim units, standing state, digest review, correction propagation, and ambient resonance."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 authors = [{name = "Miguel Johnson and Andre"}]
 keywords = ["ai", "agents", "memory", "sqlite", "hermes", "openclaw", "retrieval"]
-classifiers = ["Development Status :: 3 - Alpha", "License :: OSI Approved :: MIT License", "Programming Language :: Python :: 3"]
+classifiers = ["Development Status :: 3 - Alpha", "License :: OSI Approved :: Apache Software License", "Programming Language :: Python :: 3"]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/tier4research/memorant"
+Documentation = "https://github.com/tier4research/memorant#readme"
+Repository = "https://github.com/tier4research/memorant"
+Issues = "https://github.com/tier4research/memorant/issues"
+Changelog = "https://github.com/tier4research/memorant/releases"
 
 [project.optional-dependencies]
 embeddings = ["sentence-transformers>=3.0", "numpy>=1.24"]

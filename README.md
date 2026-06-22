@@ -1,5 +1,10 @@
 # Memorant
 
+[![Tests](https://github.com/tier4research/memorant/actions/workflows/tests.yml/badge.svg)](https://github.com/tier4research/memorant/actions/workflows/tests.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](RELEASE_NOTES.md)
+
 **Memorant** is a local-first memory substrate for AI agents. Instead of storing raw
 chat logs and hoping vector search surfaces the right thing, it records memory as
 **claim units** — small, individually addressable statements with provenance and a
@@ -37,9 +42,15 @@ long-running agents — keeping memory *correct over time*. Memorant focuses on 
 
 ## Install
 
+From the repository:
+
 ```bash
-pip install -e .
+git clone https://github.com/tier4research/memorant.git
+cd memorant
+python -m pip install .
 ```
+
+For an editable development install, use `python -m pip install -e ".[test]"`.
 
 Retrieval today is deterministic and lexical (FTS5 + token overlap), with no model
 calls on the memory path. A pluggable embedding backend is on the roadmap; see
@@ -111,4 +122,10 @@ projects credited and the specific concepts borrowed.
 
 ## License
 
-MIT. See `LICENSE` and `NOTICE.md`.
+Apache License 2.0. See `LICENSE` and `NOTICE.md`.
+
+## Contributing and security
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+the development workflow. Please report security-sensitive problems using the
+private process in [SECURITY.md](SECURITY.md), not a public issue.
