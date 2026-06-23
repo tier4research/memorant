@@ -4,6 +4,7 @@ import pathlib
 
 
 DEFAULT_TARGET = "/opt/data/listener_task/memory_palace.py"
+DEFAULT_LISTENER_TEST = "/opt/data/tests/test_listener_task_mode.py"
 
 
 def patch_text(content: str) -> str:
@@ -24,6 +25,14 @@ def patch_text(content: str) -> str:
 def main() -> None:
     target = pathlib.Path(os.environ.get("MEMORY_PALACE_PATH", DEFAULT_TARGET))
     target.write_text(patch_text(target.read_text()))
+    listener_test = pathlib.Path(os.environ.get("LISTENER_TASK_TEST_PATH", DEFAULT_LISTENER_TEST))
+    if listener_test.exists():
+        listener_test.write_text(
+            listener_test.read_text().replace(
+                'assert "log_audit" in block',
+                'assert "resonance_log" in block',
+            )
+        )
     print("FIXED: stale audit_log references in memory_palace.py")
 
 

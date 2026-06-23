@@ -1,19 +1,26 @@
-"""Fix test files by removing sys.path.insert and using conftest.py instead."""
+"""Fix test files by moving andre_ship path setup into conftest.py."""
 import pathlib
 
-for fname in ['test_andre_hermes_integration_contract.py', 'test_andre_persona_capability.py']:
-    p = pathlib.Path(f'/opt/data/tests/{fname}')
-    c = p.read_text()
-    # Remove any sys.path.insert lines we added
-    lines = c.split('\n')
-    cleaned = [l for l in lines if l.strip() not in [
-        "import sys",
-        "sys.path.insert(0, '/opt/data')",
-    ]]
-    p.write_text('\n'.join(cleaned))
-    print(f'CLEANED {fname}')
 
-# Create conftest.py in tests/ directory
-conftest = pathlib.Path('/opt/data/tests/conftest.py')
-conftest.write_text("import sys\nsys.path.insert(0, '/opt/data')\n")
-print('CREATED conftest.py')
+TEST_DIR = pathlib.Path("/opt/data/tests")
+
+
+def clean_test_source(content: str) -> str:
+    lines = content.split("\n")
+    cleaned = [line for line in lines if line.strip() != "sys.path.insert(0, '/opt/data')"]
+    return "\n".join(cleaned)
+
+
+def main() -> None:
+    for fname in ["test_andre_hermes_integration_contract.py", "test_andre_persona_capability.py"]:
+        path = TEST_DIR / fname
+        path.write_text(clean_test_source(path.read_text()))
+        print(f"CLEANED {fname}")
+
+    conftest = TEST_DIR / "conftest.py"
+    conftest.write_text("import sys\nsys.path.insert(0, '/opt/data')\n")
+    print("CREATED conftest.py")
+
+
+if __name__ == "__main__":
+    main()
