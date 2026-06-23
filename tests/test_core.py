@@ -346,6 +346,44 @@ class TestInvalidation:
         # Should inherit untrusted (min of operator + untrusted)
         assert claim.trust_tier == "untrusted"
 
+    def test_derived_inherits_min_trust_when_policy_assigns_trust(self, tmp_path):
+        """Implicit policy trust should not block derived trust inheritance."""
+        policy = TrustPolicy(rules=[
+            {"source_type": "manual", "tier": "verified"},
+        ])
+        store = MemorantStore(
+            tmp_path / "derived-policy.db",
+            StoreConfig(trust_policy=policy),
+        )
+        src1 = store.add_claim("Policy source.", source_pointer="test", trust_tier="verified")
+        src2 = store.add_claim("Lower source.", source_pointer="test", trust_tier="untrusted")
+
+        derived = store.add_claim(
+            "Policy-derived claim.",
+            source_pointer="test",
+            source_type="manual",
+            derived_from_ids=[src1, src2],
+        )
+
+        assert store.get_claim(derived).trust_tier == "untrusted"
+
+    def test_derived_from_ids_accepts_one_shot_iterators(self, store):
+        """Generator inputs should record all derivation relations."""
+        src1 = store.add_claim("Generator source one.", source_pointer="test")
+        src2 = store.add_claim("Generator source two.", source_pointer="test")
+        derived = store.add_claim(
+            "Generator derived.",
+            source_pointer="test",
+            derived_from_ids=(src for src in [src1, src2]),
+        )
+
+        with store.connect() as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM derived_from WHERE derived_id = ?",
+                (derived,),
+            ).fetchone()[0]
+        assert count == 2
+
     def test_invalidate_claims_for_fact(self, store):
         store.add_claim("Fact-derived claim.", source_pointer="fact:f1#seg0", fact_refs=["f1"])
         store.add_claim("Another fact claim.", source_pointer="fact:f1#seg1")
@@ -422,6 +460,24 @@ class TestIntegrity:
         store2 = MemorantStore(tmp_path / "test2.db")
         count = store2.import_jsonl(export_path, source_pointer="import")
         assert count == 2
+
+    def test_export_import_preserves_fact_refs_array(self, tmp_path):
+        source = MemorantStore(tmp_path / "source.db")
+        source.add_claim(
+            "Fact refs survive export import.",
+            source_pointer="fact:f1#seg0",
+            fact_refs=["f1", "room:library"],
+        )
+
+        export_path = tmp_path / "facts.jsonl"
+        source.export_jsonl(export_path)
+
+        imported = MemorantStore(tmp_path / "imported.db")
+        assert imported.import_jsonl(export_path, source_pointer="import") == 1
+
+        with imported.connect() as db:
+            refs = db.execute("SELECT fact_refs FROM claim_units").fetchone()[0]
+        assert json.loads(refs) == ["f1", "room:library"]
 
 
 # ── Doctor Contract ───────────────────────────────────────────

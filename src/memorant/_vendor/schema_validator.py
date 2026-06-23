@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-_SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "schemas" / "agent-event.schema.json"
+_SCHEMA_PATH = Path(__file__).resolve().parent / "agent-event.schema.json"
 
 
 def load_schema() -> dict[str, Any]:

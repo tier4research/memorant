@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import time
 import uuid
+from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,23 @@ def tokenize(text: str) -> set[str]:
 def lexical_score(query: str, content: str) -> float:
     q, c = tokenize(query), tokenize(content)
     return 0.0 if not q or not c else len(q & c) / math.sqrt(len(q) * len(c))
+
+
+def _coerce_string_list(value: Iterable[str] | str | None) -> list[str]:
+    """Normalize optional string iterables into a JSON-storable list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return [value]
+        if isinstance(decoded, list):
+            return [str(item) for item in decoded]
+        return [str(decoded)]
+    if isinstance(value, IterableABC):
+        return [str(item) for item in value]
+    return [str(value)]
 
 
 # ── Data types ─────────────────────────────────────────────────────
@@ -227,8 +245,13 @@ class MemorantStore:
         cid = str(uuid.uuid4())
         chash = content_hash(content)
 
+        explicit_trust_tier = trust_tier is not None
         if trust_tier is None:
             trust_tier = assign_trust(self.config.trust_policy, source_type, source_pointer)
+
+        fact_refs = _coerce_string_list(fact_refs)
+        emotional_markers = _coerce_string_list(emotional_markers)
+        derived_from_ids = _coerce_string_list(derived_from_ids)
 
         with self.connect() as db:
             # Atomic dedup: only the primary INSERT can trigger duplicate detection
@@ -240,10 +263,10 @@ class MemorantStore:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     cid, content, chash,
-                    json.dumps(list(fact_refs or [])),
+                    json.dumps(fact_refs),
                     source_type, source_pointer, trust_tier,
                     valid_from,
-                    json.dumps(list(emotional_markers or [])),
+                    json.dumps(emotional_markers),
                 ))
             except sqlite3.IntegrityError:
                 # Duplicate content_hash — increment existing
@@ -276,15 +299,15 @@ class MemorantStore:
                     )
 
                 # Inherit minimum trust from sources
-                if trust_tier is None or trust_tier == "derived":
+                if not explicit_trust_tier or trust_tier == "derived":
                     sources = db.execute(
                         "SELECT trust_tier FROM claim_units WHERE id IN ({})".format(
                             ",".join("?" for _ in derived_from_ids)
                         ),
-                        list(derived_from_ids),
+                        derived_from_ids,
                     ).fetchall()
                     if sources:
-                        min_trust = min(
+                        min_trust = max(
                             (s["trust_tier"] for s in sources),
                             key=lambda t: TrustTier.rank(t),
                         )
