@@ -58,3 +58,23 @@ def test_fix_andre_ship_conftest_preserves_sys_import() -> None:
     assert "sys.path.insert(0, '/opt/data')" not in cleaned
     assert "import sys" in cleaned
     assert "sys.modules.pop" in cleaned
+
+
+def test_fix_andre_ship_conftest_restores_missing_sys_import() -> None:
+    from scripts.fix_andre_ship_conftest import clean_test_source
+
+    source = "\n".join(
+        [
+            "from __future__ import annotations",
+            "",
+            "import importlib",
+            "",
+            "sys.path.insert(0, str(ROOT))",
+            "sys.modules.pop('context_compiler', None)",
+        ]
+    )
+
+    cleaned = clean_test_source(source)
+    assert cleaned.splitlines()[2] == "import sys"
+    assert "sys.path.insert(0, '/opt/data')" not in cleaned
+    assert "sys.path.insert(0, str(ROOT))" in cleaned
