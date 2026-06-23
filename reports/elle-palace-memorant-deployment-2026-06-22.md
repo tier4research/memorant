@@ -26,6 +26,53 @@
 
 ---
 
+## Post-Deployment Fixes (2026-06-22)
+
+After the initial deployment, additional fixes were applied and verified during the documentation and test verification pass.
+
+### VPS Code Fixes
+
+| # | File | Fix | Verification |
+|---|------|-----|-------------|
+| 1 | `listener_task/memory_palace.py` | `PALACE_DB` path: `facts.db` → `memorant.db` | `test_listener_task_mode.py` 8/8 PASS |
+| 2 | `listener_task/memory_palace.py` | SQL queries: `facts` → `claim_units`, `is_active=1 AND is_valid=1` → `invalidated_at IS NULL`, `room_id=?` → `json_extract(fact_refs, '$.room')=?` | Query returns correct counts |
+| 3 | `listener_task/memory_palace.py` | `audit_log` → `resonance_log` (table + key name, all references consistent) | grep confirms 0 `audit_log` refs remaining |
+| 4 | `llm_roles.py` | Added `gateway` to `KNOWN_PROVIDERS` frozenset | `test_stabilization.py` 28/28 PASS |
+| 5 | `tests/conftest.py` | NEW — `sys.path.insert(0, '/opt/data')` for pytest `andre_ship` imports | `test_andre_persona_capability.py` + `test_andre_hermes_integration_contract.py` 10/10 PASS |
+| 6 | `tests/test_andre_persona_capability.py` | Removed stale `sys.path.insert` prepended by v1 fix (caused `SyntaxError` with `__future__` imports) | conftest.py handles path correctly |
+| 7 | `tests/test_ssrf.py` | Restored all missing string quotes (corrupted by Git bash stripping during prior upload) | 16/16 PASS (standalone) |
+| 8 | `tests/test_heartbeat_empty_response.py` | Timeout assertion: `<=60` → `<=180` (matches §0.24 interval change) | 3/3 PASS |
+
+### Full Test Verification Results
+
+| Test Suite | Result |
+|---|---|
+| Local memorant tests (pytest) | 278 passed, 4 skipped, 0 failed |
+| VPS `test_context_compiler.py` | 19/19 PASS |
+| VPS `test_context_compiler_andre_golden.py` | PASS (exit 0) |
+| VPS `test_embodiment.py` | 95/95 PASS |
+| VPS `test_ssrf.py` (standalone) | 16/16 PASS |
+| VPS `test_stabilization.py` (standalone) | 28/28 PASS |
+| VPS `test_listener_task_mode.py` | 8/8 PASS |
+| VPS `test_heartbeat_empty_response.py` | 3/3 PASS |
+| VPS `test_drift_check`, `test_state_service_session`, `test_frame_authority`, `test_telemetry` | 15/15 PASS |
+| VPS `test_andre_persona_capability.py` | 10/10 PASS |
+| VPS `test_andre_hermes_integration_contract.py` | PASS |
+| **Total** | **472+ tests passing** |
+
+### Git Commits
+
+| Repo | Commit | Message |
+|------|--------|---------|
+| `tier4-infra/memorant` | `74b9d62` | `feat: Elle Palace to Memorant deployment - scripts, reports, and test fixes` |
+| `tier4-infra/memorant` | `9e4b3c1` | `fix: resonance_log key consistency in palace_status() and andre_ship conftest` |
+| `hermes-agent-architecture.md` | `06529a2` | `docs: add §0.28 Memorant Deployment to architecture reference` |
+| `hermes-agent-architecture.md` | (latest) | `docs: add conftest.py, resonance_log fix, and andre_ship tests to §0.28` |
+
+**Pushed to:** `https://github.com/tier4research/memorant.git` (master branch)
+
+---
+
 ## Step-by-Step Details
 
 ### Step 0: Pre-Flight — Credentials & Access
@@ -257,4 +304,4 @@ If rollback is needed:
 
 ---
 
-*Deployment completed 2026-06-22. All 8 steps passed. Zero data loss. Rollback path preserved.*
+*Deployment completed 2026-06-22. All 8 steps passed. 472+ tests passing. Zero data loss. Rollback path preserved. Pushed to `tier4research/memorant` master.*
