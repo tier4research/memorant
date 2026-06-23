@@ -5,7 +5,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Status: RC](https://img.shields.io/badge/status-rc-yellow.svg)](RELEASE_NOTES.md)
 
-**Memorant gives your AI agent a long-term memory it can actually trust.**
+**Memorant is a local-first memory suite for AI agents: trusted long-term
+claims, recoverable context compression, and expectation tracking.**
 
 Most assistants either forget everything between sessions or remember too much —
 hauling around stale, contradictory notes that quietly push answers in the wrong
@@ -14,11 +15,31 @@ with provenance, an explicit trust tier, and a temporal validity window. When
 something changes, you correct that single fact — so the agent's memory stays
 accurate the longer it runs.
 
-**v1 (release candidate):** adds trust tiers (operator > verified > derived >
+**v1 (release candidate):** ships three coordinated projects:
+
+- **Memorant:** a trustworthy long-term claim store with provenance, trust tiers,
+  corrections, temporal validity, retrieval diagnostics, and memory hygiene.
+- **Context Tuner:** recoverable context compression and token-budget control for
+  long-running agent conversations.
+- **Expectation Ledger:** local-first behavioral contracts, run tracking, and
+  violation evidence for agent governance.
+
+The core Memorant store adds trust tiers (operator > verified > derived >
 untrusted), field-aware secret redaction, atomic deduplication, FTS5-scored
 retrieval, relation tracking (supersedes/corrects/derived_from), a `doctor --json`
 health contract, and a vendored SQLite steward for safe schema migrations — all
 with zero required dependencies and a single local SQLite file.
+
+## GitHub page descriptions
+
+Use these descriptions for the GitHub About text and any package landing pages:
+
+- **Memorant:** Local-first trusted memory for AI agents: claims, provenance,
+  trust tiers, corrections, and retrieval diagnostics.
+- **Context Tuner:** Recoverable context compression and token-budget control for
+  long-running AI agent conversations.
+- **Expectation Ledger:** Local-first contract and violation ledger for AI agents,
+  with expectation search, run tracking, and evidence.
 
 ## v1 at a glance
 
@@ -42,6 +63,12 @@ creating new rows — safe under multiple readers/writers (WAL mode).
 ### FTS5 retrieval with scoring
 Composite scoring: FTS5 rank × log-scaled reinforcement bonus. Stable tie-break
 by claim ID. Trust-filtered at query time — you decide the minimum tier per search.
+
+### Retrieval diagnostics and hygiene
+`search_debug` exposes raw FTS rank, normalized relevance, reinforcement,
+recency, and final score. `hygiene` reports stale claims, broken derivation
+chains, duplicate groups, simple contradiction candidates, and untrusted claims
+that deserve review.
 
 ### Relation tracking
 `supersedes`, `corrects`, and `derived_from` tables with enforced foreign keys.
@@ -153,6 +180,33 @@ result = pre_llm_call_context(user_message, session_id="sess-abc")
 ```
 
 A complete Hermes plugin example ships in `examples/hermes_plugin/`.
+
+## Suite workflow
+
+Use the three packages together when an agent needs both continuity and
+governance:
+
+```python
+from memorant import MemorantStore
+from memorant.suite import MemoryCycle
+from context_tuner import ContextTuner
+from expectation_ledger import ExpectationLedger
+
+cycle = MemoryCycle(
+    memory=MemorantStore("memory.db"),
+    tuner=ContextTuner("context.db"),
+    ledger=ExpectationLedger("expectations.db"),
+)
+
+prepared = cycle.prepare(
+    "What should I remember before answering?",
+    messages=[{"role": "user", "content": "Long conversation..."}],
+)
+```
+
+This keeps short-term compression separate from trusted long-term memory:
+compression can produce review candidates, but it does not automatically promote
+summaries into Memorant claims.
 
 ## Encryption (optional)
 

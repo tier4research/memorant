@@ -25,7 +25,7 @@ from ._vendor.steward import Steward
 from ._vendor.doctor import DoctorReport, CheckResult, run_check, doctor_main
 from ._vendor.event import AgentEvent
 from ._vendor.flight_recorder import FlightRecorder
-from .retriever import Retriever, FTSRetriever, SearchResult
+from .retriever import Retriever, FTSRetriever, SearchResult, SearchDebugResult
 from .trust import (
     TrustTier,
     TrustPolicy,
@@ -88,6 +88,39 @@ class Claim:
     source_pointer: str = ""
     reinforcement_count: int = 0
     trust_tier: str = "untrusted"
+
+
+@dataclass(frozen=True)
+class ClaimSearchDebug:
+    id: str
+    content: str
+    score: float
+    source_pointer: str
+    reinforcement_count: int
+    trust_tier: str
+    rank: float
+    relevance: float
+    reinforcement_bonus: float
+    recency_bonus: float
+    matched_query: str
+
+
+@dataclass(frozen=True)
+class HygieneReport:
+    stale_claims: list[str]
+    duplicate_groups: list[list[str]]
+    contradiction_pairs: list[tuple[str, str]]
+    broken_derived_claims: list[str]
+    frequently_retrieved_untrusted: list[str]
+
+    def to_dict(self) -> dict:
+        return {
+            "stale_claims": self.stale_claims,
+            "duplicate_groups": self.duplicate_groups,
+            "contradiction_pairs": self.contradiction_pairs,
+            "broken_derived_claims": self.broken_derived_claims,
+            "frequently_retrieved_untrusted": self.frequently_retrieved_untrusted,
+        }
 
 
 @dataclass
@@ -399,6 +432,39 @@ class MemorantStore:
             ).to_dict())
 
         return claims
+
+    def search_debug(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        as_of: str | None = None,
+        min_trust: str | None = None,
+    ) -> list[ClaimSearchDebug]:
+        """Search claims and return score component diagnostics."""
+        self.init()
+        retriever = FTSRetriever(self.db_path, encryption_key=self.config.encryption_key)
+        return [
+            ClaimSearchDebug(
+                id=r.claim_id,
+                content=r.content,
+                score=r.score,
+                source_pointer=r.source_pointer,
+                reinforcement_count=r.reinforcement_count,
+                trust_tier=r.trust_tier,
+                rank=r.rank,
+                relevance=r.relevance,
+                reinforcement_bonus=r.reinforcement_bonus,
+                recency_bonus=r.recency_bonus,
+                matched_query=r.matched_query,
+            )
+            for r in retriever.search_debug(
+                query,
+                limit=limit,
+                as_of=as_of,
+                min_trust=min_trust,
+            )
+        ]
 
     # ── Resonance ────────────────────────────────────────────
 
@@ -906,6 +972,100 @@ class MemorantStore:
             "by_trust": by_trust,
             "db_version": self._steward.user_version,
         }
+
+    def hygiene_report(
+        self,
+        *,
+        stale_days: int = 180,
+        min_untrusted_retrievals: int = 3,
+    ) -> HygieneReport:
+        """Surface claims that need review before they become stale context."""
+        self.init()
+        with self.connect() as db:
+            stale = [
+                r["id"]
+                for r in db.execute(
+                    "SELECT id FROM claim_units WHERE is_valid = 1 "
+                    "AND julianday('now') - julianday(updated_at) >= ? "
+                    "ORDER BY updated_at ASC",
+                    (stale_days,),
+                ).fetchall()
+            ]
+            duplicate_groups = [
+                row["ids"].split(",")
+                for row in db.execute(
+                    "SELECT group_concat(id) AS ids FROM claim_units "
+                    "WHERE is_valid = 1 GROUP BY content_hash HAVING COUNT(*) > 1"
+                ).fetchall()
+                if row["ids"]
+            ]
+            broken_derived = [
+                r["derived_id"]
+                for r in db.execute(
+                    "SELECT DISTINCT d.derived_id FROM derived_from d "
+                    "LEFT JOIN claim_units src ON src.id = d.source_id AND src.is_valid = 1 "
+                    "LEFT JOIN claim_units dst ON dst.id = d.derived_id AND dst.is_valid = 1 "
+                    "WHERE src.id IS NULL OR dst.id IS NULL"
+                ).fetchall()
+            ]
+            untrusted_claim_ids = {
+                r["id"]
+                for r in db.execute(
+                    "SELECT id FROM claim_units "
+                    "WHERE trust_tier = 'untrusted' AND is_valid = 1"
+                ).fetchall()
+            }
+            logged_claim_ids = [
+                r["claim_ids"]
+                for r in db.execute(
+                    "SELECT claim_ids FROM resonance_log WHERE claim_ids IS NOT NULL"
+                ).fetchall()
+            ]
+            rows = db.execute(
+                "SELECT id, content FROM claim_units WHERE is_valid = 1"
+            ).fetchall()
+
+        untrusted_counts: dict[str, int] = {}
+        for raw_ids in logged_claim_ids:
+            try:
+                claim_ids = json.loads(raw_ids)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(claim_ids, list):
+                continue
+            for claim_id in claim_ids:
+                claim_id = str(claim_id)
+                if claim_id in untrusted_claim_ids:
+                    untrusted_counts[claim_id] = untrusted_counts.get(claim_id, 0) + 1
+
+        contradictions: list[tuple[str, str]] = []
+        by_norm: dict[str, str] = {}
+        negatives_by_positive: dict[str, str] = {}
+        for row in rows:
+            text = normalize(row["content"])
+            matched_negative = False
+            for prefix in ("not ", "no "):
+                if text.startswith(prefix):
+                    positive = text[len(prefix):]
+                    if positive in by_norm:
+                        contradictions.append((by_norm[positive], row["id"]))
+                    negatives_by_positive.setdefault(positive, row["id"])
+                    matched_negative = True
+            if not matched_negative and text in negatives_by_positive:
+                contradictions.append((negatives_by_positive[text], row["id"]))
+            by_norm.setdefault(text, row["id"])
+
+        return HygieneReport(
+            stale_claims=stale,
+            duplicate_groups=duplicate_groups,
+            contradiction_pairs=contradictions,
+            broken_derived_claims=broken_derived,
+            frequently_retrieved_untrusted=sorted(
+                claim_id
+                for claim_id, count in untrusted_counts.items()
+                if count >= min_untrusted_retrievals
+            ),
+        )
 
 
 # ── Deprecated alias ────────────────────────────────────────────────

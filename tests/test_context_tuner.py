@@ -1655,3 +1655,23 @@ class TestEdgeCases:
         ]
         assert "First system." in system_contents
         assert "Second system." in system_contents
+
+
+class TestCompressionDebug:
+    def test_compress_debug_returns_diagnostics(self, tmp_path):
+        tuner = ContextTuner(tmp_path / "debug.db")
+        messages = [
+            {"role": "system", "content": "Follow policy."},
+            {"role": "user", "content": "old " * 200},
+            {"role": "assistant", "content": "older " * 200},
+            {"role": "user", "content": "recent question"},
+        ]
+
+        debug = tuner.compress_debug(messages, max_tokens=80, keep_last_n=1)
+
+        assert debug.result.recovery_id
+        assert debug.original_message_count == 4
+        assert debug.compressed_message_count <= 4
+        assert debug.protected_message_count == 2
+        assert "system" in debug.preserved_roles
+        assert tuner.decompress(debug.result.recovery_id) == messages

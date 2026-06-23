@@ -4,7 +4,14 @@ Primary API: MemorantStore
 Deprecated alias: MemoryPalace (v0.1 compat)
 """
 
-from .core import MemorantStore, MemoryPalace, StoreConfig, Claim
+from .core import (
+    MemorantStore,
+    MemoryPalace,
+    StoreConfig,
+    Claim,
+    ClaimSearchDebug,
+    HygieneReport,
+)
 from .trust import TrustTier, TrustPolicy, redact_content
 
 __all__ = [
@@ -12,6 +19,8 @@ __all__ = [
     "MemoryPalace",
     "StoreConfig",
     "Claim",
+    "ClaimSearchDebug",
+    "HygieneReport",
     "TrustTier",
     "TrustPolicy",
     "redact_content",

@@ -214,6 +214,13 @@ class TestSearch:
         results_active = ledger.search("expectation")
         assert not any(r.id == eid for r in results_active)
 
+    def test_search_debug_exposes_rank_and_query(self, populated):
+        results = populated.search_debug("cite sources")
+        assert results
+        assert results[0].matched_query
+        assert results[0].lexical_score_value == results[0].score
+        assert isinstance(results[0].raw_rank, float)
+
 
 # ── Violations ────────────────────────────────────────────────
 
@@ -258,6 +265,39 @@ class TestViolations:
         v2 = ledger.get_violations(run_id=r2)
         assert len(v2) == 1
         assert v2[0].run_id == r2
+
+    def test_evaluate_expectation_records_pass_fail_unknown(self, ledger):
+        eid = ledger.add_expectation("Agent must cite evidence.")
+        rid = ledger.start_run(agent_id="agent")
+
+        passed = ledger.evaluate_expectation(eid, passed=True, evidence="Cited source", run_id=rid)
+        unknown = ledger.evaluate_expectation(eid, passed=None, evidence="No output yet", run_id=rid)
+        failed = ledger.evaluate_expectation(eid, passed=False, evidence="No citation", run_id=rid)
+
+        assert passed.status == "pass"
+        assert unknown.status == "unknown"
+        assert failed.status == "fail"
+        assert ledger.get_run(rid).violations_found == 1
+        assert ledger.get_expectation(eid).status == "violated"
+
+    def test_failed_evaluation_rolls_back_check_on_invalid_violation(self, ledger):
+        eid = ledger.add_expectation("Agent must keep evidence.")
+        rid = ledger.start_run(agent_id="agent")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            ledger.evaluate_expectation(
+                eid,
+                passed=False,
+                evidence="Bad severity should fail",
+                run_id=rid,
+                violation_severity="invalid",
+            )
+
+        run = ledger.get_run(rid)
+        assert run.expectations_checked == 0
+        assert run.violations_found == 0
+        assert ledger.get_violations(expectation_id=eid) == []
+        assert ledger.get_expectation(eid).status == "active"
 
 
 # ── Agent Runs ────────────────────────────────────────────────

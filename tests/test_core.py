@@ -125,6 +125,54 @@ class TestSearch:
         # First result should be the reinforced one
         assert results[0].reinforcement_count >= 5
 
+    def test_search_debug_exposes_score_components(self, populated):
+        results = populated.search_debug("technical summaries")
+        assert results
+        first = results[0]
+        assert first.rank <= 0
+        assert first.relevance >= 0
+        assert first.reinforcement_bonus >= 1
+        assert first.recency_bonus > 0
+        assert first.matched_query
+
+    def test_hygiene_report_flags_broken_derived_chain(self, store):
+        src = store.add_claim("Temporary source.", source_pointer="test")
+        derived = store.add_claim(
+            "Derived from temporary source.",
+            source_pointer="test",
+            derived_from_ids=[src],
+        )
+        store.invalidate_claim(src)
+        report = store.hygiene_report()
+        assert derived in report.broken_derived_claims
+
+    def test_hygiene_report_flags_contradictions_in_both_orders(self, store):
+        neg = store.add_claim("not deployment happens friday", source_pointer="test")
+        pos = store.add_claim("deployment happens friday", source_pointer="test")
+
+        report = store.hygiene_report()
+
+        assert (neg, pos) in report.contradiction_pairs
+
+    def test_hygiene_report_counts_untrusted_from_json_logs_exactly(self, store):
+        short = store.add_claim("Short untrusted.", source_pointer="test", trust_tier="untrusted")
+        longer = store.add_claim("Longer untrusted.", source_pointer="test", trust_tier="untrusted")
+        with store.connect() as db:
+            db.execute(
+                "INSERT INTO resonance_log (claim_ids, fired) VALUES (?, 1)",
+                (json.dumps([longer]),),
+            )
+            db.execute(
+                "INSERT INTO resonance_log (claim_ids, fired) VALUES (?, 1)",
+                (json.dumps([longer]),),
+            )
+            db.commit()
+
+        report = store.hygiene_report(min_untrusted_retrievals=2)
+
+        assert longer in report.frequently_retrieved_untrusted
+        assert short not in report.frequently_retrieved_untrusted
+
 
 # ── Resonance ─────────────────────────────────────────────────
 

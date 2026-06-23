@@ -100,6 +100,21 @@ class AgentRun:
     metadata: dict | None = None
 
 
+@dataclass(frozen=True)
+class ExpectationSearchDebug(Expectation):
+    raw_rank: float = 0.0
+    lexical_score_value: float = 0.0
+    matched_query: str = ""
+
+
+@dataclass(frozen=True)
+class ExpectationEvaluation:
+    expectation_id: str
+    status: str
+    evidence: str = ""
+    run_id: str | None = None
+
+
 @dataclass
 class LedgerConfig:
     """ExpectationLedger configuration."""
@@ -422,6 +437,35 @@ class ExpectationLedger:
         status: str | None = "active",
     ) -> list[Expectation]:
         """Search expectations using FTS5 with lexical scoring."""
+        return [
+            Expectation(
+                id=r.id,
+                content=r.content,
+                source_type=r.source_type,
+                source_pointer=r.source_pointer,
+                trust_tier=r.trust_tier,
+                status=r.status,
+                parent_contract_id=r.parent_contract_id,
+                metadata=r.metadata,
+                score=r.score,
+            )
+            for r in self.search_debug(
+                query,
+                limit=limit,
+                min_trust=min_trust,
+                status=status,
+            )
+        ]
+
+    def search_debug(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        min_trust: str | None = None,
+        status: str | None = "active",
+    ) -> list[ExpectationSearchDebug]:
+        """Search expectations and include FTS rank diagnostics."""
         self.init()
 
         if not self.db_path.exists():
@@ -444,7 +488,8 @@ class ExpectationLedger:
                     e.trust_tier,
                     e.status,
                     e.parent_contract_id,
-                    e.metadata
+                    e.metadata,
+                    f.rank AS raw_rank
                 FROM expectations_fts f
                 JOIN expectations e ON f.id = e.id
                 WHERE expectations_fts MATCH ?
@@ -473,7 +518,7 @@ class ExpectationLedger:
             return []
 
         # Compute lexical scores and sort
-        results = []
+        results: list[ExpectationSearchDebug] = []
         for r in rows:
             score = lexical_score(query, r["content"])
             meta = r["metadata"]
@@ -482,7 +527,7 @@ class ExpectationLedger:
             except (json.JSONDecodeError, TypeError):
                 meta = None
 
-            results.append(Expectation(
+            results.append(ExpectationSearchDebug(
                 id=r["id"],
                 content=r["content"],
                 source_type=r["source_type"],
@@ -492,10 +537,85 @@ class ExpectationLedger:
                 parent_contract_id=r["parent_contract_id"],
                 metadata=meta,
                 score=score,
+                raw_rank=r["raw_rank"],
+                lexical_score_value=score,
+                matched_query=fts_query,
             ))
 
         results.sort(key=lambda x: -x.score)
         return results[:limit]
+
+    def evaluate_expectation(
+        self,
+        expectation_id: str,
+        *,
+        passed: bool | None,
+        evidence: str = "",
+        run_id: str | None = None,
+        violation_severity: str = "warning",
+    ) -> ExpectationEvaluation:
+        """Record a pass/fail/unknown evaluation with optional evidence."""
+        self.init()
+        exp = self.get_expectation(expectation_id)
+        if exp is None:
+            raise ValueError(f"Expectation not found: {expectation_id}")
+
+        if passed is False:
+            vid = str(uuid.uuid4())
+            with self.connect() as db:
+                if run_id:
+                    db.execute("""
+                        INSERT OR REPLACE INTO run_expectations
+                            (run_id, expectation_id, passed, checked_at)
+                        VALUES (?, ?, 0, datetime('now'))
+                    """, (run_id, expectation_id))
+                    db.execute(
+                        "UPDATE runs SET expectations_checked = ("
+                        "  SELECT COUNT(*) FROM run_expectations "
+                        "  WHERE run_id = ? AND passed = 1"
+                        ") WHERE id = ?",
+                        (run_id, run_id),
+                    )
+                db.execute(
+                    "UPDATE expectations SET status = 'violated', "
+                    "updated_at = datetime('now') WHERE id = ?",
+                    (expectation_id,),
+                )
+                db.execute("""
+                    INSERT INTO violations (id, expectation_id, run_id, severity, evidence)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (vid, expectation_id, run_id, violation_severity, evidence))
+                if run_id:
+                    db.execute(
+                        "UPDATE runs SET violations_found = violations_found + 1 "
+                        "WHERE id = ?",
+                        (run_id,),
+                    )
+                db.commit()
+
+            if self._flight:
+                self._flight.record(AgentEvent(
+                    component="expectation_ledger",
+                    component_version=COMPONENT_VERSION,
+                    event_type="violation.recorded",
+                    severity=violation_severity,
+                    session_id="",
+                    trace_id="",
+                    payload={
+                        "violation_id": vid,
+                        "expectation_id": expectation_id,
+                        "run_id": run_id,
+                    },
+                ).to_dict())
+
+            return ExpectationEvaluation(expectation_id, "fail", evidence, run_id)
+
+        if run_id and passed is not None:
+            self.check_expectation(run_id, expectation_id, passed=bool(passed))
+
+        if passed is True:
+            return ExpectationEvaluation(expectation_id, "pass", evidence, run_id)
+        return ExpectationEvaluation(expectation_id, "unknown", evidence, run_id)
 
     # ── Violation recording ──────────────────────────────────
 

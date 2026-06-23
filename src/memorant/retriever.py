@@ -29,6 +29,16 @@ class SearchResult:
     rank: float  # Raw FTS5 rank
 
 
+@dataclass(frozen=True)
+class SearchDebugResult(SearchResult):
+    """A retrieval result with score component diagnostics."""
+
+    relevance: float
+    reinforcement_bonus: float
+    recency_bonus: float
+    matched_query: str
+
+
 @runtime_checkable
 class Retriever(Protocol):
     """Pluggable retrieval backend protocol.
@@ -95,6 +105,33 @@ class FTSRetriever:
         min_trust: str | None = None,
     ) -> list[SearchResult]:
         """Search claims with FTS5 + composite scoring."""
+        return [
+            SearchResult(
+                claim_id=r.claim_id,
+                content=r.content,
+                score=r.score,
+                source_pointer=r.source_pointer,
+                reinforcement_count=r.reinforcement_count,
+                trust_tier=r.trust_tier,
+                rank=r.rank,
+            )
+            for r in self.search_debug(
+                query,
+                limit=limit,
+                as_of=as_of,
+                min_trust=min_trust,
+            )
+        ]
+
+    def search_debug(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        as_of: str | None = None,
+        min_trust: str | None = None,
+    ) -> list[SearchDebugResult]:
+        """Search claims and include score component diagnostics."""
         if not self.db_path.exists():
             return []
 
@@ -158,7 +195,7 @@ class FTSRetriever:
             min_rank = max_rank = 0.0
             rank_range = 0.0
 
-        results = []
+        results: list[SearchDebugResult] = []
         for r in rows:
             rank_value = float(r["fts_rank"] or 0.0)
 
@@ -187,7 +224,7 @@ class FTSRetriever:
             # Composite score
             score = relevance * reinf_bonus * recency_bonus
 
-            results.append(SearchResult(
+            results.append(SearchDebugResult(
                 claim_id=r["id"],
                 content=r["content"],
                 score=score,
@@ -195,6 +232,10 @@ class FTSRetriever:
                 reinforcement_count=reinf,
                 trust_tier=r["trust_tier"],
                 rank=r["fts_rank"],
+                relevance=relevance,
+                reinforcement_bonus=reinf_bonus,
+                recency_bonus=recency_bonus,
+                matched_query=fts_query,
             ))
 
         # Sort by composite score, then reinforcement, then ID (stable tie-break)

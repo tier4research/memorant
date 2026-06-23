@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -34,6 +35,32 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--as-of", default=None)
     sp.add_argument("--min-trust", default=None, choices=["operator", "verified", "derived", "untrusted"])
     sp.set_defaults(func=cmd_search)
+
+    # search-debug
+    sp = sub.add_parser("search-debug", help="Search claims with score diagnostics")
+    sp.add_argument("query")
+    sp.add_argument("--limit", type=int, default=5)
+    sp.add_argument("--as-of", default=None)
+    sp.add_argument("--min-trust", default=None, choices=["operator", "verified", "derived", "untrusted"])
+    sp.add_argument("--json", action="store_true", help="Output JSON")
+    sp.set_defaults(func=cmd_search_debug)
+
+    # hygiene
+    sp = sub.add_parser("hygiene", help="Report memory hygiene review candidates")
+    sp.add_argument("--stale-days", type=int, default=180)
+    sp.add_argument("--min-untrusted-retrievals", type=int, default=3)
+    sp.add_argument("--json", action="store_true", help="Output JSON")
+    sp.set_defaults(func=cmd_hygiene)
+
+    # eval subcommands
+    ev = sub.add_parser("eval", help="Evaluation helpers")
+    evsub = ev.add_subparsers(dest="eval_cmd", required=True)
+
+    sp = evsub.add_parser("retrieval", help="Evaluate retrieval from a JSONL dataset")
+    sp.add_argument("--dataset", required=True, help="JSONL rows with query and expected_ids")
+    sp.add_argument("--limit", type=int, default=5)
+    sp.add_argument("--min-trust", default=None, choices=["operator", "verified", "derived", "untrusted"])
+    sp.set_defaults(func=cmd_eval_retrieval)
 
     # resonate
     sp = sub.add_parser("resonate", help="Run resonance")
@@ -150,6 +177,72 @@ def cmd_search(args):
                                   as_of=args.as_of, min_trust=args.min_trust):
         print(f"{c.score:.3f}\t{c.trust_tier}\t{c.id}\t{c.content}")
 
+def cmd_search_debug(args):
+    results = _store(args).search_debug(
+        args.query,
+        limit=args.limit,
+        as_of=args.as_of,
+        min_trust=args.min_trust,
+    )
+    if args.json:
+        print(json.dumps([r.__dict__ for r in results], indent=2))
+        return
+    for r in results:
+        print(
+            f"{r.score:.3f}\t{r.trust_tier}\t{r.id}\t"
+            f"rank={r.rank:.6f}\trel={r.relevance:.3f}\t"
+            f"reinf={r.reinforcement_bonus:.3f}\trecency={r.recency_bonus:.3f}\t"
+            f"{r.content}"
+        )
+
+def cmd_hygiene(args):
+    report = _store(args).hygiene_report(
+        stale_days=args.stale_days,
+        min_untrusted_retrievals=args.min_untrusted_retrievals,
+    )
+    data = report.to_dict()
+    if args.json:
+        print(json.dumps(data, indent=2))
+        return
+    for key, value in data.items():
+        print(f"{key}: {len(value)}")
+
+def cmd_eval_retrieval(args):
+    store = _store(args)
+    total = 0
+    hits = 0
+    reciprocal_ranks = []
+    with open(args.dataset, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            expected = {str(x) for x in row.get("expected_ids", [])}
+            if not expected:
+                continue
+            total += 1
+            results = store.search(
+                row["query"],
+                limit=args.limit,
+                min_trust=args.min_trust,
+            )
+            ids = [r.id for r in results]
+            match_positions = [i + 1 for i, rid in enumerate(ids) if rid in expected]
+            if match_positions:
+                hits += 1
+                reciprocal_ranks.append(1 / min(match_positions))
+            else:
+                reciprocal_ranks.append(0)
+
+    metrics = {
+        "queries": total,
+        "hit_rate_at_k": hits / total if total else 0.0,
+        "mrr_at_k": sum(reciprocal_ranks) / total if total else 0.0,
+        "limit": args.limit,
+    }
+    print(json.dumps(metrics, indent=2))
+
 def cmd_resonate(args):
     result = _store(args).resonate(args.context, session_id=args.session_id)
     print(result or "(no resonance)")
@@ -169,7 +262,6 @@ def cmd_invalidate(args):
     print(f"invalidated {n} claim(s)")
 
 def cmd_stats(args):
-    import json
     print(json.dumps(_store(args).stats(), indent=2))
 
 def cmd_doctor(args):

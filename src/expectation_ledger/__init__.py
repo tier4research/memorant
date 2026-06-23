@@ -9,6 +9,8 @@ from .core import (
     Expectation,
     Violation,
     AgentRun,
+    ExpectationSearchDebug,
+    ExpectationEvaluation,
 )
 from .trust import TrustTier, TrustPolicy, redact_content
 
@@ -18,6 +20,8 @@ __all__ = [
     "Expectation",
     "Violation",
     "AgentRun",
+    "ExpectationSearchDebug",
+    "ExpectationEvaluation",
     "TrustTier",
     "TrustPolicy",
     "redact_content",

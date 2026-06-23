@@ -56,6 +56,19 @@ class CompressedMessages:
     within_budget: bool = True  # False when compression couldn't meet max_tokens
 
 
+@dataclass(frozen=True)
+class CompressionDebug:
+    """Compression result plus diagnostics for tuning and evaluation."""
+
+    result: CompressedMessages
+    original_message_count: int
+    compressed_message_count: int
+    protected_message_count: int
+    budget_enforced: bool
+    degradation_reason: str | None
+    preserved_roles: list[str]
+
+
 @dataclass
 class TunerConfig:
     """ContextTuner configuration.
@@ -220,6 +233,79 @@ class ContextTuner:
             compressed_tokens=compressed_tokens,
             compression_ratio=actual_ratio,
             within_budget=within_budget,
+        )
+
+    def compress_debug(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        compression_ratio: float | None = None,
+        keep_last_n: int | None = None,
+        session_metadata: dict[str, Any] | None = None,
+    ) -> CompressionDebug:
+        """Compress messages and return diagnostics for quality checks."""
+        self.init()
+
+        max_tokens = max_tokens if max_tokens is not None else self.config.max_tokens
+        compression_ratio = (
+            compression_ratio if compression_ratio is not None
+            else self.config.compression_ratio
+        )
+        keep_last_n = (
+            keep_last_n if keep_last_n is not None else self.config.keep_last_n
+        )
+
+        outcome = compress_messages_detailed(
+            messages,
+            max_tokens=max_tokens,
+            compression_ratio=compression_ratio,
+            keep_last_n=keep_last_n,
+            summarizer=self.config.summarizer,
+            image_token_cost=self.config.image_token_cost,
+            audio_token_cost=self.config.audio_token_cost,
+        )
+        actual_ratio = outcome.compressed_tokens / max(1, outcome.original_tokens)
+        recovery_id = self._recovery.save(
+            original_messages=messages,
+            compressed_messages=outcome.messages,
+            original_tokens=outcome.original_tokens,
+            compressed_tokens=outcome.compressed_tokens,
+            compression_ratio=actual_ratio,
+            session_metadata=session_metadata,
+        )
+        result = CompressedMessages(
+            messages=outcome.messages,
+            recovery_id=recovery_id,
+            original_tokens=outcome.original_tokens,
+            compressed_tokens=outcome.compressed_tokens,
+            compression_ratio=actual_ratio,
+            within_budget=outcome.within_budget,
+        )
+
+        non_system = [
+            i for i, m in enumerate(messages)
+            if isinstance(m, dict) and m.get("role") != "system"
+        ]
+        protected_indices = {
+            i for i, m in enumerate(messages)
+            if isinstance(m, dict) and m.get("role") == "system"
+        }
+        if keep_last_n > 0:
+            protected_indices.update(non_system[-keep_last_n:])
+
+        return CompressionDebug(
+            result=result,
+            original_message_count=len(messages),
+            compressed_message_count=len(outcome.messages),
+            protected_message_count=len(protected_indices),
+            budget_enforced=outcome.budget_enforced,
+            degradation_reason=outcome.degradation_reason,
+            preserved_roles=[
+                str(messages[i].get("role", ""))
+                for i in sorted(protected_indices)
+                if isinstance(messages[i], dict)
+            ],
         )
 
     # ── Decompression / rollback ─────────────────────────────

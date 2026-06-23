@@ -10,7 +10,7 @@ recovery for rollback/decompression.
 Package: tier4research/context-tuner
 """
 
-from .core import ContextTuner, TunerConfig, CompressedMessages
+from .core import ContextTuner, TunerConfig, CompressedMessages, CompressionDebug
 from .recovery import RecoveryStore, RecoveryRecord
 from .errors import RecoveryCorruptionError
 from .compressor import (
@@ -28,6 +28,7 @@ __all__ = [
     "ContextTuner",
     "TunerConfig",
     "CompressedMessages",
+    "CompressionDebug",
     "RecoveryStore",
     "RecoveryRecord",
     "RecoveryCorruptionError",
