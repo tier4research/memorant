@@ -32,4 +32,5 @@ packages = ["src/memorant", "src/expectation_ledger", "src/context_tuner"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-q"

@@ -7,17 +7,22 @@ recovered (decompressed) later. Uses FTS5 for searching compressed content.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from memorant._vendor.steward import Steward
 
+from .compressor import _extract_text
+from .errors import RecoveryCorruptionError
 from .schema import SCHEMA_V1, MIGRATIONS
+
+logger = logging.getLogger(__name__)
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -26,7 +31,10 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _safe_json_load(data: str | None, default: Any = None) -> Any:
+def _safe_json_load(
+    data: str | None,
+    default: Any = None,
+) -> Any:
     """Load JSON, returning default on any parse error.
 
     Isolates malformed rows so one corrupt record doesn't break
@@ -38,6 +46,47 @@ def _safe_json_load(data: str | None, default: Any = None) -> Any:
         return json.loads(data)
     except (json.JSONDecodeError, TypeError):
         return default
+
+
+def _decode_message_list(
+    raw: str | None,
+    recovery_id: str,
+    field: str,
+) -> list[dict[str, Any]]:
+    """Decode a JSON field as a message list, raising on corruption.
+
+    Raises RecoveryCorruptionError if the field is present but malformed
+    or does not decode to a list.
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RecoveryCorruptionError(recovery_id, field, exc)
+    if not isinstance(parsed, list):
+        raise RecoveryCorruptionError(
+            recovery_id, field,
+            TypeError(f"expected list, got {type(parsed).__name__}"),
+        )
+    return parsed
+
+
+def _validate_message_list(
+    raw: str | None,
+    recovery_id: str,
+    field: str,
+) -> list[dict[str, Any]] | None:
+    """Validate a field as a message list, returning None on corruption.
+
+    Used by list_recent() and search() to skip corrupt rows with a warning
+    rather than raising.
+    """
+    try:
+        return _decode_message_list(raw, recovery_id, field)
+    except RecoveryCorruptionError as exc:
+        logger.warning("Skipping corrupt recovery record: %s", exc)
+        return None
 
 
 # ── Data types ───────────────────────────────────────────────────
@@ -64,6 +113,11 @@ class RecoveryStore:
     Stores original messages alongside their compressed versions,
     indexed via FTS5 for searchability. Uses the Steward for
     migration management and integrity checks.
+
+    Attributes:
+        db_path: Path to the SQLite database.
+        max_sessions: Optional cap on recovery sessions (None = unbounded).
+        max_age_days: Optional max age in days for recovery sessions (None = unbounded).
     """
 
     def __init__(
@@ -72,6 +126,8 @@ class RecoveryStore:
         *,
         busy_timeout_ms: int = 5000,
         encryption_key: str | None = None,
+        max_sessions: int | None = None,
+        max_age_days: int | None = None,
     ):
         self.db_path = Path(db_path)
         self._steward = Steward(
@@ -80,6 +136,8 @@ class RecoveryStore:
             encryption_key=encryption_key,
         )
         self._encryption_key = encryption_key
+        self.max_sessions = max_sessions
+        self.max_age_days = max_age_days
 
     # ── Connection management ────────────────────────────────
 
@@ -153,6 +211,7 @@ class RecoveryStore:
         """Save a recovery session. Returns the recovery ID.
 
         If recovery_id is not provided, a UUID is generated.
+        Pruning (if configured) happens atomically in the same transaction.
         """
         self.init()
         rid = recovery_id or str(uuid.uuid4())
@@ -160,9 +219,10 @@ class RecoveryStore:
         original_json = json.dumps(original_messages, ensure_ascii=False)
         compressed_json = json.dumps(compressed_messages, ensure_ascii=False)
 
-        # Build searchable content from compressed messages
+        # Build searchable content from compressed messages using _extract_text
         searchable = " ".join(
-            m.get("content", "") for m in compressed_messages
+            _extract_text(m.get("content", ""))
+            for m in compressed_messages
             if isinstance(m, dict) and m.get("content")
         )
 
@@ -187,12 +247,20 @@ class RecoveryStore:
                 "INSERT INTO recovery_sessions_fts (id, searchable_content) VALUES (?, ?)",
                 (rid, searchable),
             )
+
+            # Atomic pruning in same transaction
+            self._prune_impl(db)
+
             db.commit()
 
         return rid
 
     def load(self, recovery_id: str) -> RecoveryRecord | None:
-        """Load a recovery session by ID."""
+        """Load a recovery session by ID.
+
+        Raises RecoveryCorruptionError if the record exists but has
+        corrupt message fields. Returns None if the record doesn't exist.
+        """
         self.init()
 
         with self.connect() as db:
@@ -204,10 +272,18 @@ class RecoveryStore:
         if row is None:
             return None
 
+        # Validate required fields — raises on corruption
+        original_messages = _decode_message_list(
+            row["original_messages"], recovery_id, "original_messages"
+        )
+        compressed_messages = _decode_message_list(
+            row["compressed_messages"], recovery_id, "compressed_messages"
+        )
+
         return RecoveryRecord(
             id=row["id"],
-            original_messages=_safe_json_load(row["original_messages"]),
-            compressed_messages=_safe_json_load(row["compressed_messages"]),
+            original_messages=original_messages,
+            compressed_messages=compressed_messages,
             original_tokens=row["original_tokens"],
             compressed_tokens=row["compressed_tokens"],
             compression_ratio=row["compression_ratio"],
@@ -238,7 +314,10 @@ class RecoveryStore:
         return cur.rowcount > 0
 
     def list_recent(self, limit: int = 20) -> list[RecoveryRecord]:
-        """List most recent recovery sessions."""
+        """List most recent recovery sessions.
+
+        Skips corrupt records with a warning rather than raising.
+        """
         self.init()
 
         with self.connect() as db:
@@ -247,26 +326,40 @@ class RecoveryStore:
                 (limit,),
             ).fetchall()
 
-        return [
-            RecoveryRecord(
-                id=row["id"],
-                original_messages=_safe_json_load(row["original_messages"], default=[]),
-                compressed_messages=_safe_json_load(row["compressed_messages"], default=[]),
-                original_tokens=row["original_tokens"],
-                compressed_tokens=row["compressed_tokens"],
-                compression_ratio=row["compression_ratio"],
-                created_at=row["created_at"],
-                session_metadata=(
-                    _safe_json_load(row["session_metadata"])
-                    if row["session_metadata"]
-                    else None
-                ),
+        results: list[RecoveryRecord] = []
+        for row in rows:
+            rid = row["id"]
+            original_messages = _validate_message_list(
+                row["original_messages"], rid, "original_messages"
             )
-            for row in rows
-        ]
+            compressed_messages = _validate_message_list(
+                row["compressed_messages"], rid, "compressed_messages"
+            )
+            if original_messages is None or compressed_messages is None:
+                continue
+            results.append(
+                RecoveryRecord(
+                    id=rid,
+                    original_messages=original_messages,
+                    compressed_messages=compressed_messages,
+                    original_tokens=row["original_tokens"],
+                    compressed_tokens=row["compressed_tokens"],
+                    compression_ratio=row["compression_ratio"],
+                    created_at=row["created_at"],
+                    session_metadata=(
+                        _safe_json_load(row["session_metadata"])
+                        if row["session_metadata"]
+                        else None
+                    ),
+                )
+            )
+        return results
 
     def search(self, query: str, limit: int = 10) -> list[RecoveryRecord]:
-        """Search recovery sessions via FTS5 on compressed content."""
+        """Search recovery sessions via FTS5 on compressed content.
+
+        Skips corrupt records with a warning rather than raising.
+        """
         self.init()
 
         if not self.db_path.exists():
@@ -286,23 +379,119 @@ class RecoveryStore:
                 (fts_query, limit),
             ).fetchall()
 
-        return [
-            RecoveryRecord(
-                id=row["id"],
-                original_messages=_safe_json_load(row["original_messages"], default=[]),
-                compressed_messages=_safe_json_load(row["compressed_messages"], default=[]),
-                original_tokens=row["original_tokens"],
-                compressed_tokens=row["compressed_tokens"],
-                compression_ratio=row["compression_ratio"],
-                created_at=row["created_at"],
-                session_metadata=(
-                    _safe_json_load(row["session_metadata"])
-                    if row["session_metadata"]
-                    else None
-                ),
+        results: list[RecoveryRecord] = []
+        for row in rows:
+            rid = row["id"]
+            original_messages = _validate_message_list(
+                row["original_messages"], rid, "original_messages"
             )
-            for row in rows
-        ]
+            compressed_messages = _validate_message_list(
+                row["compressed_messages"], rid, "compressed_messages"
+            )
+            if original_messages is None or compressed_messages is None:
+                continue
+            results.append(
+                RecoveryRecord(
+                    id=rid,
+                    original_messages=original_messages,
+                    compressed_messages=compressed_messages,
+                    original_tokens=row["original_tokens"],
+                    compressed_tokens=row["compressed_tokens"],
+                    compression_ratio=row["compression_ratio"],
+                    created_at=row["created_at"],
+                    session_metadata=(
+                        _safe_json_load(row["session_metadata"])
+                        if row["session_metadata"]
+                        else None
+                    ),
+                )
+            )
+        return results
+
+    # ── Pruning ──────────────────────────────────────────────
+
+    def _prune_impl(self, db: sqlite3.Connection) -> int:
+        """Prune recovery sessions per retention policy.
+
+        Must be called within an existing transaction (shared db connection).
+        Deletes FTS rows atomically with recovery rows.
+
+        Pruning order:
+        1. Age limit (max_age_days) — oldest sessions removed first
+        2. Session count limit (max_sessions) — oldest by created_at, id
+
+        Returns the number of sessions pruned.
+        """
+        pruned = 0
+        cutoff_id: str | None = None
+
+        # Step 1: Age-based pruning
+        if self.max_age_days is not None and self.max_age_days >= 0:
+            cutoff_time = (
+                datetime.now(timezone.utc) - timedelta(days=self.max_age_days)
+            ).isoformat()
+            old_ids = [
+                row["id"]
+                for row in db.execute(
+                    """SELECT id FROM recovery_sessions
+                       WHERE julianday(created_at) < julianday(?)
+                       ORDER BY created_at ASC, id ASC""",
+                    (cutoff_time,),
+                ).fetchall()
+            ]
+            if old_ids:
+                placeholders = ",".join("?" for _ in old_ids)
+                db.execute(
+                    f"DELETE FROM recovery_sessions_fts WHERE id IN ({placeholders})",
+                    old_ids,
+                )
+                db.execute(
+                    f"DELETE FROM recovery_sessions WHERE id IN ({placeholders})",
+                    old_ids,
+                )
+                pruned += len(old_ids)
+
+        # Step 2: Count-based pruning
+        if self.max_sessions is not None and self.max_sessions >= 0:
+            total = db.execute(
+                "SELECT COUNT(*) FROM recovery_sessions"
+            ).fetchone()[0]
+            excess = total - self.max_sessions
+            if excess > 0:
+                oldest_ids = [
+                    row["id"]
+                    for row in db.execute(
+                        """SELECT id FROM recovery_sessions
+                           ORDER BY created_at ASC, id ASC
+                           LIMIT ?""",
+                        (excess,),
+                    ).fetchall()
+                ]
+                if oldest_ids:
+                    placeholders = ",".join("?" for _ in oldest_ids)
+                    db.execute(
+                        f"DELETE FROM recovery_sessions_fts WHERE id IN ({placeholders})",
+                        oldest_ids,
+                    )
+                    db.execute(
+                        f"DELETE FROM recovery_sessions WHERE id IN ({placeholders})",
+                        oldest_ids,
+                    )
+                    pruned += len(oldest_ids)
+
+        return pruned
+
+    def prune(self) -> int:
+        """Prune recovery sessions per retention policy.
+
+        Public API for explicit maintenance. Applies age limit first,
+        then session count limit. Returns the number of sessions pruned.
+        """
+        self.init()
+        with self.connect() as db:
+            pruned = self._prune_impl(db)
+            db.commit()
+        return pruned
 
     # ── Integrity & maintenance ──────────────────────────────
 

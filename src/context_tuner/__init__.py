@@ -12,8 +12,11 @@ Package: tier4research/context-tuner
 
 from .core import ContextTuner, TunerConfig, CompressedMessages
 from .recovery import RecoveryStore, RecoveryRecord
+from .errors import RecoveryCorruptionError
 from .compressor import (
     compress_messages,
+    compress_messages_detailed,
+    CompressionOutcome,
     count_tokens,
     count_message_tokens,
     extract_key_facts,
@@ -27,7 +30,10 @@ __all__ = [
     "CompressedMessages",
     "RecoveryStore",
     "RecoveryRecord",
+    "RecoveryCorruptionError",
+    "CompressionOutcome",
     "compress_messages",
+    "compress_messages_detailed",
     "count_tokens",
     "count_message_tokens",
     "extract_key_facts",

@@ -5,17 +5,69 @@ and summarization. Default summarizer uses truncation + key fact
 extraction. Designed to be extensible for LLM-based summarizers.
 
 Architecture:
+- _extract_text(): unified text extraction for multimodal content
 - count_tokens(): approximate token count (4 chars ≈ 1 token)
 - extract_key_facts(): regex-based key fact extraction
-- chunk_messages(): split messages into keep/recent/old groups
-- summarize_chunk(): truncate + extract facts for a chunk
-- compress_messages(): main compression pipeline
+- compress_messages(): deprecated three-tuple wrapper (v1 compat)
+- compress_messages_detailed(): full compression pipeline returning CompressionOutcome
 """
 
 from __future__ import annotations
 
+import inspect
 import re
+import warnings
+from dataclasses import dataclass, field
 from typing import Any, Callable
+
+
+# ── Multimodal text extraction ─────────────────────────────────
+
+def _extract_text(content: str | list[dict] | Any) -> str:
+    """Extract plain text from message content, handling multimodal format.
+
+    Supports:
+    - str: returned as-is
+    - list of parts (OpenAI multimodal): text parts joined, image/audio
+      parts yield placeholder tokens
+    - Other types: converted to str
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type", "")
+            if item_type == "text":
+                parts.append(item.get("text", ""))
+            elif item_type == "image_url":
+                parts.append("[image]")
+            elif item_type == "audio":
+                parts.append("[audio]")
+        return " ".join(parts)
+    return str(content)
+
+
+def _extract_image_count(content: str | list[dict] | Any) -> int:
+    """Count image parts in multimodal content."""
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1 for item in content
+        if isinstance(item, dict) and item.get("type") == "image_url"
+    )
+
+
+def _extract_audio_count(content: str | list[dict] | Any) -> int:
+    """Count audio parts in multimodal content."""
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1 for item in content
+        if isinstance(item, dict) and item.get("type") == "audio"
+    )
 
 
 # ── Token counting ──────────────────────────────────────────────
@@ -35,11 +87,22 @@ def count_tokens(text: str) -> int:
     return max(1, len(stripped) // 4)
 
 
-def count_message_tokens(messages: list[dict[str, Any]]) -> int:
+def count_message_tokens(
+    messages: list[dict[str, Any]],
+    *,
+    image_token_cost: int = 85,
+    audio_token_cost: int = 50,
+) -> int:
     """Count approximate tokens across all messages.
 
     Handles string content, list-valued content (OpenAI multimodal),
-    and non-dict messages gracefully.
+    and non-dict messages gracefully. Accounts for image and audio
+    parts using configurable per-part token costs.
+
+    Args:
+        messages: List of message dicts.
+        image_token_cost: Estimated tokens per image part (default: 85).
+        audio_token_cost: Estimated tokens per audio part (default: 50).
     """
     total = 0
     for msg in messages:
@@ -48,15 +111,11 @@ def count_message_tokens(messages: list[dict[str, Any]]) -> int:
             total += 4
             continue
         content = msg.get("content", "")
-        if isinstance(content, list):
-            # OpenAI multimodal: extract text parts
-            text = " ".join(
-                part.get("text", "") for part in content
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
-            total += count_tokens(text)
-        else:
-            total += count_tokens(str(content) if content else "")
+        text = _extract_text(content)
+        total += count_tokens(text)
+        # Add multimodal costs for non-text parts
+        total += _extract_image_count(content) * image_token_cost
+        total += _extract_audio_count(content) * audio_token_cost
         total += 4  # Role marker overhead
     return total
 
@@ -140,7 +199,394 @@ def extract_key_facts(text: str, max_facts: int = 5) -> list[str]:
     return unique
 
 
-# ── Message chunking ────────────────────────────────────────────
+# ── Summarization ───────────────────────────────────────────────
+
+# Type for pluggable summarizer functions.
+# Summarizers receive the chunk of messages plus optional keyword args
+# (max_chars, max_facts) for configuration. The default summarizer
+# accepts these; custom summarizers should accept **kwargs to forward them
+# or define matching keyword parameters.
+Summarizer = Callable[..., str]
+
+
+def _call_summarizer(
+    summarizer: Summarizer,
+    messages: list[dict[str, Any]],
+    *,
+    max_chars: int,
+) -> str:
+    """Call old and new summarizer signatures without masking user errors."""
+    try:
+        parameters = inspect.signature(summarizer).parameters.values()
+    except (TypeError, ValueError):
+        return summarizer(messages)
+
+    accepts_max_chars = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or parameter.name == "max_chars"
+        for parameter in parameters
+    )
+    if accepts_max_chars:
+        return summarizer(messages, max_chars=max_chars)
+    return summarizer(messages)
+
+
+def default_summarize_chunk(
+    messages: list[dict[str, Any]],
+    max_chars: int = 300,
+    max_facts: int = 3,
+) -> str:
+    """Default summarizer: truncation + key fact extraction.
+
+    Concatenates message contents, truncates to max_chars,
+    and prepends extracted key facts.
+
+    Args:
+        messages: List of message dicts to summarize
+        max_chars: Maximum characters for the truncated content
+        max_facts: Maximum number of key facts to extract
+
+    Returns:
+        Summary string combining key facts and truncated content
+    """
+    if not messages:
+        return ""
+
+    # Concatenate all message contents (using _extract_text for multimodal)
+    full_text = " ".join(
+        _extract_text(m.get("content", ""))
+        for m in messages
+        if isinstance(m, dict) and m.get("content")
+    )
+
+    if not full_text.strip():
+        return ""
+
+    # Extract key facts from the full text
+    facts = extract_key_facts(full_text, max_facts=max_facts)
+
+    # Truncate content
+    if len(full_text) > max_chars:
+        truncated = full_text[:max_chars] + "..."
+    else:
+        truncated = full_text
+
+    # Build summary
+    parts: list[str] = []
+    if facts:
+        parts.append("[KEY FACTS] " + " | ".join(facts))
+    parts.append("[CONTENT] " + truncated)
+
+    return "\n".join(parts)
+
+
+# ── CompressionOutcome ─────────────────────────────────────────
+
+@dataclass
+class CompressionOutcome:
+    """Detailed result of a compress_messages_detailed() call.
+
+    Attributes:
+        messages: The compressed (or original) message list.
+        original_tokens: Token count of the original input.
+        compressed_tokens: Token count of the output.
+        within_budget: True if compressed_tokens <= max_tokens.
+        budget_enforced: True if budget trimming was applied.
+        degradation_reason: Why budget enforcement occurred, if any.
+    """
+
+    messages: list[dict[str, Any]]
+    original_tokens: int
+    compressed_tokens: int
+    within_budget: bool = True
+    budget_enforced: bool = False
+    degradation_reason: str | None = None
+
+
+# ── Input validation ────────────────────────────────────────────
+
+def _validate_compression_params(
+    max_tokens: int,
+    keep_last_n: int,
+    compression_ratio: float,
+) -> None:
+    """Validate compression parameters, raising ValueError on invalid input."""
+    if max_tokens <= 0:
+        raise ValueError(f"max_tokens must be > 0, got {max_tokens}")
+    if keep_last_n < 0:
+        raise ValueError(f"keep_last_n must be >= 0, got {keep_last_n}")
+    if not (0.0 <= compression_ratio <= 1.0):
+        raise ValueError(
+            f"compression_ratio must be between 0.0 and 1.0, got {compression_ratio}"
+        )
+
+
+# ── Indexed-segment compression pipeline ───────────────────────
+
+def _compute_message_tokens(msg: dict[str, Any], *, image_token_cost: int = 85, audio_token_cost: int = 50) -> int:
+    """Compute token cost for a single message."""
+    content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+    text = _extract_text(content)
+    tokens = count_tokens(text)
+    tokens += _extract_image_count(content) * image_token_cost
+    tokens += _extract_audio_count(content) * audio_token_cost
+    tokens += 4  # role overhead
+    return tokens
+
+
+def compress_messages_detailed(
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int = 8000,
+    compression_ratio: float = 0.5,
+    keep_last_n: int = 3,
+    summarizer: Summarizer | None = None,
+    image_token_cost: int = 85,
+    audio_token_cost: int = 50,
+) -> CompressionOutcome:
+    """Compress messages using indexed-segment reassembly with shared budget.
+
+    Uses an index-based approach to preserve the original position of all
+    messages. Protected messages (system + recent) keep their exact positions;
+    contiguous unprotected ranges are summarized and anchored at their first
+    original index.
+
+    Args:
+        messages: List of message dicts with "role" and "content" keys.
+        max_tokens: Hard token budget for the output.
+        compression_ratio: Target ratio (guidance for summarizer budget).
+        keep_last_n: Number of most recent non-system messages to protect.
+        summarizer: Pluggable summarizer function.
+        image_token_cost: Estimated tokens per image part.
+        audio_token_cost: Estimated tokens per audio part.
+
+    Returns:
+        CompressionOutcome with detailed status.
+    """
+    _validate_compression_params(max_tokens, keep_last_n, compression_ratio)
+    summarizer = summarizer or default_summarize_chunk
+
+    original_tokens = count_message_tokens(
+        messages, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+    )
+
+    # Under threshold — no compression needed
+    if original_tokens <= max_tokens:
+        return CompressionOutcome(
+            messages=list(messages),
+            original_tokens=original_tokens,
+            compressed_tokens=original_tokens,
+            within_budget=True,
+            budget_enforced=False,
+        )
+
+    # Nothing to compress
+    if not messages:
+        return CompressionOutcome(
+            messages=[],
+            original_tokens=0,
+            compressed_tokens=0,
+            within_budget=True,
+            budget_enforced=False,
+        )
+
+    # ── Identify protected and unprotected indices ────────────
+    non_system_indices = [
+        i for i, m in enumerate(messages)
+        if isinstance(m, dict) and m.get("role") != "system"
+    ]
+
+    # Protected: all system messages + last keep_last_n non-system messages
+    protected_set: set[int] = set()
+    for i, m in enumerate(messages):
+        if isinstance(m, dict) and m.get("role") == "system":
+            protected_set.add(i)
+
+    if keep_last_n > 0 and len(non_system_indices) <= keep_last_n:
+        # All non-system messages are protected (fewer than or equal to keep_last_n)
+        protected_set.update(non_system_indices)
+    elif keep_last_n > 0:
+        recent_indices = non_system_indices[-keep_last_n:]
+        protected_set.update(recent_indices)
+
+    unprotected_indices = [
+        i for i in range(len(messages)) if i not in protected_set
+    ]
+
+    # ── Compute protected token cost ─────────────────────────
+    protected_tokens = sum(
+        _compute_message_tokens(
+            messages[i], image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+        )
+        for i in sorted(protected_set)
+    )
+
+    # If protected content alone exceeds budget, return with signal
+    if protected_tokens > max_tokens:
+        result_messages = [
+            messages[i] for i in sorted(protected_set)
+        ]
+        compressed_tokens = count_message_tokens(
+            result_messages, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+        )
+        return CompressionOutcome(
+            messages=result_messages,
+            original_tokens=original_tokens,
+            compressed_tokens=compressed_tokens,
+            within_budget=False,
+            budget_enforced=True,
+            degradation_reason="protected_content_exceeds_budget",
+        )
+
+    # ── Group contiguous unprotected ranges ───────────────────
+    ranges: list[tuple[int, list[int]]] = []  # (start_index, [indices])
+    current_range: list[int] = []
+    current_start: int | None = None
+
+    for idx in unprotected_indices:
+        if current_range and idx == current_range[-1] + 1:
+            current_range.append(idx)
+        else:
+            if current_range:
+                ranges.append((current_start, current_range))
+            current_range = [idx]
+            current_start = idx
+    if current_range:
+        ranges.append((current_start, current_range))
+
+    # ── Shared summary budget ────────────────────────────────
+    summary_budget = max_tokens - protected_tokens
+    # Account for message overhead (4 tokens per summary message)
+    num_ranges = len(ranges)
+    overhead_per_summary = 4
+    available_for_content = max(0, summary_budget - (num_ranges * overhead_per_summary))
+    max_chars_per_range = max(50, (available_for_content // max(1, num_ranges)) * 4)
+
+    # ── Generate summaries ───────────────────────────────────
+    summaries: list[tuple[int, dict[str, Any]]] = []  # (anchor_index, summary_msg)
+    for start_idx, indices in ranges:
+        chunk_msgs = [messages[i] for i in indices]
+        summary_text = _call_summarizer(
+            summarizer, chunk_msgs, max_chars=max_chars_per_range
+        )
+        if summary_text:
+            # Use role from the first message in the range
+            role = chunk_msgs[0].get("role", "user") if isinstance(chunk_msgs[0], dict) else "user"
+            summary_msg = {
+                "role": role,
+                "content": f"[COMPRESSED {len(indices)} messages]\n{summary_text}",
+            }
+            summaries.append((start_idx, summary_msg))
+
+    # ── Enforce shared budget ────────────────────────────────
+    budget_enforced = False
+    degradation_reason: str | None = None
+
+    # Check total tokens with all summaries
+    protected_msgs = [messages[i] for i in sorted(protected_set)]
+    summary_msgs = [msg for _, msg in summaries]
+    all_msgs = protected_msgs + summary_msgs
+    total_tokens = count_message_tokens(
+        all_msgs, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+    )
+
+    # If over budget, remove oldest summaries (lowest anchor index) first
+    if total_tokens > max_tokens and summaries:
+        budget_enforced = True
+        degradation_reason = "summaries_trimmed_to_fit_budget"
+
+        # Sort by anchor index descending so we can pop the oldest (lowest index)
+        summaries.sort(key=lambda x: x[0], reverse=True)
+
+        while len(summaries) > 1 and total_tokens > max_tokens:
+            summaries.pop()  # Remove oldest (last in descending sort = lowest index)
+            summary_msgs = [msg for _, msg in summaries]
+            all_msgs = protected_msgs + summary_msgs
+            total_tokens = count_message_tokens(
+                all_msgs, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+            )
+
+        # If one summary remains and still over budget, trim it
+        if summaries and total_tokens > max_tokens:
+            anchor, last_summary = summaries[-1]
+            content = last_summary.get("content", "")
+            # Binary-search-like trim: reduce content until it fits
+            target_chars = max(20, (summary_budget - 4) * 4)
+            while len(content) > target_chars and total_tokens > max_tokens:
+                content = content[:len(content) - 50]
+                last_summary["content"] = content
+                all_msgs = protected_msgs + [last_summary]
+                total_tokens = count_message_tokens(
+                    all_msgs, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+                )
+            summaries[-1] = (anchor, last_summary)
+
+    # ── Reassemble by original index ─────────────────────────
+    indexed_msgs: list[tuple[int, dict[str, Any]]] = []
+    # Protected messages at their original positions
+    for i in sorted(protected_set):
+        indexed_msgs.append((i, messages[i]))
+    # Summaries anchored at their range start positions
+    for anchor_idx, summary_msg in summaries:
+        indexed_msgs.append((anchor_idx, summary_msg))
+
+    # Sort by original index to preserve ordering
+    indexed_msgs.sort(key=lambda x: x[0])
+    result_messages = [msg for _, msg in indexed_msgs]
+
+    compressed_tokens = count_message_tokens(
+        result_messages, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+    )
+
+    return CompressionOutcome(
+        messages=result_messages,
+        original_tokens=original_tokens,
+        compressed_tokens=compressed_tokens,
+        within_budget=compressed_tokens <= max_tokens,
+        budget_enforced=budget_enforced,
+        degradation_reason=degradation_reason,
+    )
+
+
+# ── Deprecated compatibility wrapper ────────────────────────────
+
+def compress_messages(
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int = 8000,
+    compression_ratio: float = 0.5,
+    keep_last_n: int = 3,
+    summarizer: Summarizer | None = None,
+    image_token_cost: int = 85,
+    audio_token_cost: int = 50,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Compress a list of messages to fit within a token budget.
+
+    .. deprecated::
+        Use ``compress_messages_detailed()`` instead, which returns a
+        ``CompressionOutcome`` with full status information.
+
+    Returns:
+        Tuple of (compressed_messages, original_token_count, compressed_token_count)
+    """
+    warnings.warn(
+        "compress_messages() is deprecated; use compress_messages_detailed() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    outcome = compress_messages_detailed(
+        messages,
+        max_tokens=max_tokens,
+        compression_ratio=compression_ratio,
+        keep_last_n=keep_last_n,
+        summarizer=summarizer,
+        image_token_cost=image_token_cost,
+        audio_token_cost=audio_token_cost,
+    )
+    return outcome.messages, outcome.original_tokens, outcome.compressed_tokens
+
+
+# ── Legacy helper (kept for backward compat) ────────────────────
 
 def chunk_messages(
     messages: list[dict[str, Any]],
@@ -179,152 +625,3 @@ def chunk_messages(
     system_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
 
     return system_msgs, recent_msgs, old_msgs
-
-
-# ── Summarization ───────────────────────────────────────────────
-
-# Type for pluggable summarizer functions.
-# Summarizers receive the chunk of messages plus optional keyword args
-# (max_chars, max_facts) for configuration. The default summarizer
-# accepts these; custom summarizers should accept **kwargs to forward them
-# or define matching keyword parameters.
-Summarizer = Callable[..., str]
-
-
-def default_summarize_chunk(
-    messages: list[dict[str, Any]],
-    max_chars: int = 300,
-    max_facts: int = 3,
-) -> str:
-    """Default summarizer: truncation + key fact extraction.
-
-    Concatenates message contents, truncates to max_chars,
-    and prepends extracted key facts.
-
-    Args:
-        messages: List of message dicts to summarize
-        max_chars: Maximum characters for the truncated content
-        max_facts: Maximum number of key facts to extract
-
-    Returns:
-        Summary string combining key facts and truncated content
-    """
-    if not messages:
-        return ""
-
-    # Concatenate all message contents
-    full_text = " ".join(
-        m.get("content", "") for m in messages
-        if isinstance(m, dict) and m.get("content")
-    )
-
-    if not full_text.strip():
-        return ""
-
-    # Extract key facts from the full text
-    facts = extract_key_facts(full_text, max_facts=max_facts)
-
-    # Truncate content
-    if len(full_text) > max_chars:
-        truncated = full_text[:max_chars] + "..."
-    else:
-        truncated = full_text
-
-    # Build summary
-    parts: list[str] = []
-    if facts:
-        parts.append("[KEY FACTS] " + " | ".join(facts))
-    parts.append("[CONTENT] " + truncated)
-
-    return "\n".join(parts)
-
-
-# ── Main compression pipeline ───────────────────────────────────
-
-def compress_messages(
-    messages: list[dict[str, Any]],
-    *,
-    max_tokens: int = 8000,
-    compression_ratio: float = 0.5,
-    keep_last_n: int = 3,
-    summarizer: Summarizer | None = None,
-) -> tuple[list[dict[str, Any]], int, int]:
-    """Compress a list of messages to fit within a token budget.
-
-    If the total token count is under max_tokens, returns messages
-    unchanged. Otherwise, compresses older messages while preserving
-    system messages and recent turns.
-
-    Compression strategy:
-    1. Count tokens; if under limit, return as-is
-    2. Split into system, recent, and old messages
-    3. Group old messages into chunks by role transitions
-    4. Summarize each chunk using the configured summarizer
-    5. Assemble: system + summarized chunks + recent messages
-
-    Args:
-        messages: List of message dicts with "role" and "content" keys
-        max_tokens: Token threshold; compression triggers if exceeded
-        compression_ratio: Target ratio of compressed to original (guidance)
-        keep_last_n: Number of most recent messages to keep intact
-        summarizer: Pluggable summarizer function (default: default_summarize_chunk)
-
-    Returns:
-        Tuple of (compressed_messages, original_token_count, compressed_token_count)
-    """
-    summarizer = summarizer or default_summarize_chunk
-
-    original_tokens = count_message_tokens(messages)
-
-    # Under threshold — no compression needed
-    if original_tokens <= max_tokens:
-        return list(messages), original_tokens, original_tokens
-
-    # Split messages
-    system_msgs, recent_msgs, old_msgs = chunk_messages(messages, keep_last_n=keep_last_n)
-
-    # If nothing to compress, return as-is
-    if not old_msgs:
-        return list(messages), original_tokens, original_tokens
-
-    # Group old messages into chunks (by role transitions for context)
-    chunks: list[list[dict[str, Any]]] = []
-    current_chunk: list[dict[str, Any]] = []
-    current_role: str | None = None
-
-    for msg in old_msgs:
-        role = msg.get("role", "unknown") if isinstance(msg, dict) else "unknown"
-        if role != current_role and current_chunk:
-            chunks.append(current_chunk)
-            current_chunk = []
-        current_chunk.append(msg)
-        current_role = role
-
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    # Calculate max characters per chunk based on compression ratio
-    # Target: compressed tokens = original_tokens * compression_ratio
-    target_compressed_tokens = int(original_tokens * compression_ratio)
-    # Reserve tokens for system + recent messages
-    system_recent_tokens = count_message_tokens(system_msgs + recent_msgs)
-    available_for_old = max(0, target_compressed_tokens - system_recent_tokens)
-    max_chars_per_chunk = max(50, (available_for_old // max(1, len(chunks))) * 4)
-
-    # Summarize each chunk
-    summarized_msgs: list[dict[str, Any]] = []
-    for chunk in chunks:
-        summary = summarizer(chunk, max_chars=max_chars_per_chunk)
-        if summary:
-            # Use the role from the first message in the chunk
-            role = chunk[0].get("role", "user") if isinstance(chunk[0], dict) else "user"
-            summarized_msgs.append({
-                "role": role,
-                "content": f"[COMPRESSED {len(chunk)} messages]\n{summary}",
-            })
-
-    # Assemble final message list
-    compressed = list(system_msgs) + summarized_msgs + list(recent_msgs)
-    compressed_tokens = count_message_tokens(compressed)
-
-    return compressed, original_tokens, compressed_tokens

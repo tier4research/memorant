@@ -24,6 +24,8 @@ from memorant._vendor.doctor import DoctorReport, CheckResult, run_check, doctor
 
 from .compressor import (
     compress_messages,
+    compress_messages_detailed,
+    CompressionOutcome,
     count_message_tokens,
     chunk_messages,
     Summarizer,
@@ -65,6 +67,10 @@ class TunerConfig:
         keep_last_n: Number of most recent messages to keep intact
         summarizer: Pluggable summarizer function (default: truncation + facts)
         encryption_key: Optional SQLCipher encryption key
+        image_token_cost: Estimated tokens per image part (default: 85)
+        audio_token_cost: Estimated tokens per audio part (default: 50)
+        max_sessions: Optional max recovery sessions to retain (None = unbounded)
+        max_age_days: Optional max age in days for recovery sessions (None = unbounded)
     """
 
     db_path: str | Path = "./context_tuner.db"
@@ -73,6 +79,10 @@ class TunerConfig:
     keep_last_n: int = DEFAULT_KEEP_LAST_N
     summarizer: Summarizer | None = None
     encryption_key: str | None = None
+    image_token_cost: int = 85
+    audio_token_cost: int = 50
+    max_sessions: int | None = None
+    max_age_days: int | None = None
 
 
 # ── ContextTuner (v1 primary API) ──────────────────────────────
@@ -109,6 +119,8 @@ class ContextTuner:
         self._recovery = RecoveryStore(
             self.db_path,
             encryption_key=self.config.encryption_key,
+            max_sessions=self.config.max_sessions,
+            max_age_days=self.config.max_age_days,
         )
         # Steward alias (exposed for consistency with memorant pattern)
         self._steward = self._recovery._steward
@@ -174,17 +186,22 @@ class ContextTuner:
             keep_last_n if keep_last_n is not None else self.config.keep_last_n
         )
 
-        # Run compression
-        compressed, original_tokens, compressed_tokens = compress_messages(
+        # Run compression using the detailed pipeline
+        outcome = compress_messages_detailed(
             messages,
             max_tokens=max_tokens,
             compression_ratio=compression_ratio,
             keep_last_n=keep_last_n,
             summarizer=self.config.summarizer,
+            image_token_cost=self.config.image_token_cost,
+            audio_token_cost=self.config.audio_token_cost,
         )
 
+        compressed = outcome.messages
+        original_tokens = outcome.original_tokens
+        compressed_tokens = outcome.compressed_tokens
         actual_ratio = compressed_tokens / max(1, original_tokens)
-        within_budget = compressed_tokens <= max_tokens
+        within_budget = outcome.within_budget
 
         # Save recovery record
         recovery_id = self._recovery.save(
@@ -244,7 +261,11 @@ class ContextTuner:
 
     def count_tokens(self, messages: list[dict[str, Any]]) -> int:
         """Count approximate tokens across all messages."""
-        return count_message_tokens(messages)
+        return count_message_tokens(
+            messages,
+            image_token_cost=self.config.image_token_cost,
+            audio_token_cost=self.config.audio_token_cost,
+        )
 
     def needs_compression(
         self,
@@ -253,7 +274,7 @@ class ContextTuner:
     ) -> bool:
         """Check if messages exceed the token threshold."""
         threshold = max_tokens if max_tokens is not None else self.config.max_tokens
-        return count_message_tokens(messages) > threshold
+        return self.count_tokens(messages) > threshold
 
     # ── Integrity & backup ───────────────────────────────────
 
