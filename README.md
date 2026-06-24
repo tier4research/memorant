@@ -5,21 +5,30 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](RELEASE_NOTES.md)
 
-**Memorant gives your AI agent a long-term memory it can actually trust.**
+**Memorant gives your AI agent a memory that works more like a mind than a database.**
 
-Most assistants either forget everything between sessions or remember too much —
-hauling around stale, contradictory notes that quietly push answers in the wrong
-direction. Memorant takes a different approach: it stores what your agent learns as
-small, individual facts, each one tagged with where it came from and when it's true.
-When something changes, you correct that single fact instead of rewriting the whole
-history — so the agent's memory stays accurate the longer it runs.
+Most agent memory is a search index or a profile file — you ask, it fetches,
+nothing surfaces on its own. Memorant is different. It stores memory as individual
+claims with provenance and temporal validity, but the real shift is in how that
+memory *behaves*:
 
-It's **local-first**: everything lives in a single file on your own machine, with no
-cloud service, no external API on the memory path, and **zero required dependencies**.
-If your agent can call a Python function before it talks to the model, it can use
-Memorant.
+- **Resonance, not retrieval.** Background context is quietly surfaced based on
+  what's happening right now — not because you asked, but because it's relevant.
+  Like how your name catches your ear across a noisy room.
+- **Arcs.** Related memories thread into ongoing narratives with their own lifecycle
+  — active, dormant, closed. Not just "facts about X" but the *story of X*.
+- **Emotional charge.** Memories carry emotional markers that influence how quickly
+  and often they surface. A memory you felt strongly about comes back faster.
+- **Consolidation.** Raw experiences get extracted, deduplicated, and distilled into
+  a standing state — the way sleep consolidates short-term experiences into
+  long-term understanding.
+- **Habituation.** The same memory doesn't dominate every conversation. The system
+  learns to quiet repeated signals, surfacing them only when genuinely relevant.
 
-Memorant gives an agent three separate ways to work with its memory:
+Local-first, zero cloud dependencies, single SQLite file. Your agent's memory
+stays accurate the longer it runs.
+
+Memorant also provides three operational interfaces for working with memory:
 
 1. **Standing State** — the agent's reliable "what's true right now" notes: a short,
    readable summary it carries into every conversation. It never changes silently —
@@ -30,10 +39,6 @@ Memorant gives an agent three separate ways to work with its memory:
 3. **Query** — direct, evidence-backed lookups: ask the memory a question and every
    answer cites its source and a relevance score, so you can always see *why* the agent
    knows something.
-
-Under the hood, memory is recorded as **claim units** — individually addressable
-statements with provenance and a temporal validity window — stored in a single local
-SQLite database with full-text search.
 
 ## Why it exists
 
@@ -54,6 +59,60 @@ as the facts change.** That's the gap Memorant is built around:
 - **Safe by default** — background context is sanitized before it can reach the model.
 - **Yours, on your machine** — one local SQLite file with fast full-text search (FTS5).
   Nothing leaves your computer.
+
+## How memory actually works
+
+Most agent memory systems are retrieval engines: you ask a question, they search
+for matching text, they return results. Memorant starts from a different premise
+— that memory isn't something you search, it's something that *surfaces*.
+
+### Resonance
+
+Instead of waiting for a query, Memorant maintains a low-level background hum.
+On every turn, the current context is compared against the memory store, and
+relevant claims surface gently — not as answers, but as context the model can use
+to stay grounded. This is *resonance*: context-triggered, not query-triggered.
+
+The system tracks what surfaced and how recently, applying cooldown penalties so
+the same strong memory doesn't dominate every conversation — the way your brain
+habituates to a repeated sound.
+
+### Arcs (narrative threads)
+
+Isolated facts are useful but incomplete. Human memory organizes experience into
+*ongoing stories* — threads that connect related moments over time. Memorant's
+arcs do this: a claim about your project's architecture, a session where you
+changed direction, a decision that resolved an open question — these can all
+belong to the same arc.
+
+Arcs have a lifecycle. Active arcs are being revisited. Dormant arcs haven't been
+touched in a while. Closed arcs are resolved stories. The system manages these
+transitions automatically, surfacing active arcs more often and letting closed
+ones rest.
+
+### Emotional charge
+
+Every claim can carry emotional markers — not as metadata tags, but as signals
+that influence retrieval. Emotionally charged memories surface faster and with
+higher salience, just as they do in human cognition. The system doesn't care
+*what* the emotion is — it uses the presence of emotional charge as a relevance
+signal.
+
+### Consolidation
+
+Raw memory (diary entries, session logs, conversation fragments) gets processed
+through a consolidation pipeline that extracts individual claims, deduplicates
+them, detects emotional markers, links them to arcs, and regenerates a standing
+state — a distilled summary of what's true right now. This happens periodically,
+the way sleep consolidates short-term experiences into long-term memory.
+
+### Novelty detection
+
+The system actively looks for *surprise* — claims that are relevant to the
+current context but haven't been consolidated into the standing state yet. High
+novelty means "this matters and it's not already understood." This is the
+system's equivalent of the hippocampal novelty signal — the brain's way of
+flagging new information that needs attention.
 
 ## Who it's for
 
