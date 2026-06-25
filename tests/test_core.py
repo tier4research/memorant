@@ -871,3 +871,89 @@ class TestRetrieverTrustValidation:
         retriever = FTSRetriever(tmp_path / "rtv2.db")
         with pytest.raises(ValueError):
             retriever.search_debug("Test", min_trust="bogus")
+
+class TestLegacyMigrationPartialTables:
+    """Legacy DBs missing tables that later migrations ALTER should still init."""
+
+    def test_partial_legacy_missing_digest_history(self, tmp_path):
+        """A DB with pre-migration claim_units should survive migration 5."""
+        db_path = tmp_path / "partial1.db"
+        with sqlite3.connect(db_path) as db:
+            db.execute("PRAGMA user_version = 0")
+            # Pre-migration claim_units: no trust_tier column
+            db.execute("""
+                CREATE TABLE claim_units (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    content_hash TEXT UNIQUE,
+                    source_pointer TEXT NOT NULL
+                )
+            """)
+            db.commit()
+        store = MemorantStore(db_path)
+        tables = store.init()
+        assert "claim_units" in tables
+        assert store._steward.user_version > 0
+        with sqlite3.connect(db_path) as db:
+            row = db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='digest_history'"
+            ).fetchone()
+            assert row is not None
+
+    def test_partial_legacy_missing_resonance_log(self, tmp_path):
+        """A DB with old claim_units + old digest_history should survive migration 7."""
+        db_path = tmp_path / "partial2.db"
+        with sqlite3.connect(db_path) as db:
+            db.execute("PRAGMA user_version = 0")
+            db.execute("""
+                CREATE TABLE claim_units (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    content_hash TEXT UNIQUE,
+                    source_pointer TEXT NOT NULL
+                )
+            """)
+            # Old digest_history: no state column
+            db.execute("""
+                CREATE TABLE digest_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    version TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    diff_from_prior TEXT,
+                    promoted INTEGER DEFAULT 0,
+                    promoted_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+            db.commit()
+        store = MemorantStore(db_path)
+        tables = store.init()
+        assert "claim_units" in tables
+        with sqlite3.connect(db_path) as db:
+            row = db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='resonance_log'"
+            ).fetchone()
+            assert row is not None
+
+    def test_partial_legacy_minimal_claim_units_only(self, tmp_path):
+        """A DB with ONLY pre-migration claim_units should fully initialize."""
+        db_path = tmp_path / "partial3.db"
+        with sqlite3.connect(db_path) as db:
+            db.execute("PRAGMA user_version = 0")
+            db.execute("""
+                CREATE TABLE claim_units (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    content_hash TEXT UNIQUE,
+                    source_pointer TEXT NOT NULL
+                )
+            """)
+            db.commit()
+        store = MemorantStore(db_path)
+        tables = store.init()
+        expected = {
+            "claim_units", "supersedes", "corrects", "derived_from",
+            "digest_history", "resonance_log",
+        }
+        found = set(tables)
+        assert expected <= found, f"Missing: {expected - found}"

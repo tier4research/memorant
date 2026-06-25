@@ -526,11 +526,16 @@ def compress_messages_detailed(
         if summaries and total_tokens > max_tokens:
             anchor, last_summary = summaries[-1]
             content = last_summary.get("content", "")
-            target_chars = max(0, (summary_budget - 4) * 4)
+            # Recompute the char budget from the actual remaining token budget
+            # after Phase 1 trimming, not the stale pre-Phase-1 summary_budget.
+            remaining_budget = max_tokens - protected_tokens - 4  # 4 = role overhead
+            target_chars = max(0, remaining_budget * 4)
             while content and total_tokens > max_tokens:
-                content = content[:max(0, len(content) - 50)]
+                # Clip to soft target first (fast-forward), then fine-trim
                 if len(content) > target_chars:
                     content = content[:target_chars]
+                else:
+                    content = content[:max(0, len(content) - 50)]
                 last_summary["content"] = content
                 all_msgs = protected_msgs + [last_summary]
                 total_tokens = count_message_tokens(

@@ -184,7 +184,16 @@ MIGRATIONS = {
             FOREIGN KEY (source_id) REFERENCES claim_units(id)
         );
     """,
-    5: """
+    5: """\
+        CREATE TABLE IF NOT EXISTS digest_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version TEXT NOT NULL,
+            content TEXT NOT NULL,
+            diff_from_prior TEXT,
+            promoted INTEGER DEFAULT 0,
+            promoted_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         ALTER TABLE digest_history ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'
             CHECK(state IN ('pending', 'promoted', 'rejected'));
     """,
@@ -196,7 +205,17 @@ MIGRATIONS = {
             ELSE 'pending'
         END;
     """,
-    7: """
+    7: """\
+        CREATE TABLE IF NOT EXISTS resonance_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            turn_context TEXT,
+            claim_ids TEXT,
+            fired INTEGER DEFAULT 0,
+            used_by_agent INTEGER DEFAULT 0,
+            latency_ms INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         ALTER TABLE resonance_log ADD COLUMN retention_mode TEXT DEFAULT 'full'
             CHECK(retention_mode IN ('full', 'minimal', 'none'));
     """,
