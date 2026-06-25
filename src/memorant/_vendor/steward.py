@@ -17,6 +17,8 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+
+from .sqlcipher import apply_key
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,7 +71,7 @@ class Steward:
         if self._encryption_key:
             import sqlcipher3
             db = sqlcipher3.connect(str(self.db_path))
-            db.execute(f"PRAGMA key = '{self._encryption_key}'")
+            apply_key(db, self._encryption_key)
         else:
             db = sqlite3.connect(str(self.db_path))
 

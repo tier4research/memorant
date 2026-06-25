@@ -519,3 +519,26 @@ class TestFTSOperators:
         ledger.add_expectation("deployment testing.", trust_tier="verified")
         results = ledger.search("NOT deployed")
         assert isinstance(results, list)
+
+
+
+class TestTrustValidationRegression:
+    def test_duplicate_add_does_not_swallow_invalid_trust_tier(self, ledger):
+        ledger.add_expectation("Duplicate security rule.", trust_tier="operator")
+        with pytest.raises(sqlite3.IntegrityError):
+            ledger.add_expectation("Duplicate security rule.", trust_tier="root")
+
+    def test_duplicate_add_does_not_swallow_invalid_source_type(self, ledger):
+        ledger.add_expectation("Duplicate source rule.")
+        with pytest.raises(sqlite3.IntegrityError):
+            ledger.add_expectation("Duplicate source rule.", source_type="bad")
+
+    def test_duplicate_add_does_not_swallow_invalid_parent_contract(self, ledger):
+        ledger.add_expectation("Duplicate contract rule.")
+        with pytest.raises(sqlite3.IntegrityError):
+            ledger.add_expectation("Duplicate contract rule.", parent_contract_id="missing")
+
+    def test_search_invalid_min_trust_raises(self, ledger):
+        ledger.add_expectation("Untrusted searchable rule.", trust_tier="untrusted")
+        with pytest.raises(ValueError):
+            ledger.search("searchable", min_trust="bogus")

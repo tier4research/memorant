@@ -455,12 +455,27 @@ def compress_messages_detailed(
         ranges.append((current_start, current_range))
 
     # ── Shared summary budget ────────────────────────────────
-    summary_budget = max_tokens - protected_tokens
+    target_tokens = min(max_tokens, max(1, int(original_tokens * compression_ratio)))
+    summary_budget = target_tokens - protected_tokens
+    if summary_budget <= 0 or not ranges:
+        result_messages = [messages[i] for i in sorted(protected_set)]
+        compressed_tokens = count_message_tokens(
+            result_messages, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
+        )
+        return CompressionOutcome(
+            messages=result_messages,
+            original_tokens=original_tokens,
+            compressed_tokens=compressed_tokens,
+            within_budget=compressed_tokens <= max_tokens,
+            budget_enforced=True,
+            degradation_reason="no_summary_budget",
+        )
+
     # Account for message overhead (4 tokens per summary message)
     num_ranges = len(ranges)
     overhead_per_summary = 4
     available_for_content = max(0, summary_budget - (num_ranges * overhead_per_summary))
-    max_chars_per_range = max(50, (available_for_content // max(1, num_ranges)) * 4)
+    max_chars_per_range = max(1, (available_for_content // max(1, num_ranges)) * 4)
 
     # ── Generate summaries ───────────────────────────────────
     summaries: list[tuple[int, dict[str, Any]]] = []  # (anchor_index, summary_msg)
@@ -506,20 +521,25 @@ def compress_messages_detailed(
                 all_msgs, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
             )
 
-        # If one summary remains and still over budget, trim it
+        # If one summary remains and still over budget, trim it. Drop it if
+        # even the summary message overhead cannot fit in the hard budget.
         if summaries and total_tokens > max_tokens:
             anchor, last_summary = summaries[-1]
             content = last_summary.get("content", "")
-            # Binary-search-like trim: reduce content until it fits
-            target_chars = max(20, (summary_budget - 4) * 4)
-            while len(content) > target_chars and total_tokens > max_tokens:
-                content = content[:len(content) - 50]
+            target_chars = max(0, (summary_budget - 4) * 4)
+            while content and total_tokens > max_tokens:
+                content = content[:max(0, len(content) - 50)]
+                if len(content) > target_chars:
+                    content = content[:target_chars]
                 last_summary["content"] = content
                 all_msgs = protected_msgs + [last_summary]
                 total_tokens = count_message_tokens(
                     all_msgs, image_token_cost=image_token_cost, audio_token_cost=audio_token_cost
                 )
-            summaries[-1] = (anchor, last_summary)
+            if total_tokens > max_tokens or not content.strip():
+                summaries.pop()
+            else:
+                summaries[-1] = (anchor, last_summary)
 
     # ── Reassemble by original index ─────────────────────────
     indexed_msgs: list[tuple[int, dict[str, Any]]] = []

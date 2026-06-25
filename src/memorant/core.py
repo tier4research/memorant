@@ -22,10 +22,12 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from ._vendor.steward import Steward
+from ._vendor.sqlcipher import apply_key
 from ._vendor.doctor import DoctorReport, CheckResult, run_check, doctor_main
 from ._vendor.event import AgentEvent
 from ._vendor.flight_recorder import FlightRecorder
 from .retriever import Retriever, FTSRetriever, SearchResult, SearchDebugResult
+
 from .trust import (
     TrustTier,
     TrustPolicy,
@@ -186,7 +188,7 @@ class MemorantStore:
                     "Install with: pip install memorant[encryption]"
                 )
             db = sqlcipher3.connect(str(self.db_path))
-            db.execute(f"PRAGMA key = '{key}'")
+            apply_key(db, key)
         else:
             db = sqlite3.connect(str(self.db_path))
 
@@ -887,7 +889,8 @@ class MemorantStore:
 
     def migrate(self) -> int:
         """Run pending steward migrations."""
-        return self._steward.migrate()
+        self.init()
+        return self._steward.user_version
 
     def export_jsonl(self, path: str | Path) -> Path:
         """Export all valid claims as JSONL."""

@@ -264,6 +264,14 @@ class ExpectationLedger:
             )
 
         with self.connect() as db:
+            if parent_contract_id is not None:
+                parent = db.execute(
+                    "SELECT id FROM contracts WHERE id = ?",
+                    (parent_contract_id,),
+                ).fetchone()
+                if parent is None:
+                    raise sqlite3.IntegrityError("FOREIGN KEY constraint failed: parent_contract_id")
+
             # Atomic dedup: only the primary INSERT can trigger duplicate detection
             try:
                 db.execute("""
@@ -277,8 +285,11 @@ class ExpectationLedger:
                     parent_contract_id,
                     json.dumps(metadata or {}),
                 ))
-            except sqlite3.IntegrityError:
-                # Duplicate content_hash — reactivate if superseded
+            except sqlite3.IntegrityError as exc:
+                # Duplicate content_hash — reactivate if superseded. Do not
+
+                if "content_hash" not in str(exc):
+                    raise
                 existing = db.execute(
                     "SELECT id, status FROM expectations WHERE content_hash = ?",
                     (chash,),
@@ -477,6 +488,8 @@ class ExpectationLedger:
         fts_query = " OR ".join(f'"{t}"' for t in terms) if terms else '""'
 
         trust_ranks = {"operator": 0, "verified": 1, "derived": 2, "untrusted": 3}
+        if min_trust and min_trust not in trust_ranks:
+            raise ValueError(f"Invalid min_trust: {min_trust}")
 
         with self.connect() as db:
             sql = """
@@ -503,7 +516,7 @@ class ExpectationLedger:
             if min_trust:
                 allowed = [
                     t for t in trust_ranks
-                    if trust_ranks[t] <= trust_ranks.get(min_trust, 3)
+                    if trust_ranks[t] <= trust_ranks[min_trust]
                 ]
                 sql += " AND e.trust_tier IN ("
                 sql += ",".join("?" for _ in allowed) + ")"

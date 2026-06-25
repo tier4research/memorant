@@ -826,3 +826,48 @@ class TestRecencyBonus:
         assert len(results) >= 1
         # Score should be non-negative with relative normalization
         assert results[0].score >= 0
+
+
+class TestMigrateAndSqlcipherRegression:
+    def test_migrate_initializes_new_database(self, tmp_path):
+        store = MemorantStore(tmp_path / "migrate.db")
+        version = store.migrate()
+        assert version == store._steward.user_version
+        assert version > 0
+        with sqlite3.connect(tmp_path / "migrate.db") as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == version
+            assert db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='claim_units'"
+            ).fetchone()
+
+    def test_sqlcipher_key_is_quoted(self):
+        from memorant._vendor.sqlcipher import apply_key
+
+        class FakeDB:
+            def __init__(self):
+                self.sql = None
+
+            def execute(self, sql):
+                self.sql = sql
+
+        db = FakeDB()
+        apply_key(db, "abc'; PRAGMA user_version=999; --")
+        assert db.sql == "PRAGMA key = 'abc''; PRAGMA user_version=999; --'"
+
+
+class TestRetrieverTrustValidation:
+    def test_search_invalid_min_trust_raises(self, tmp_path):
+        store = MemorantStore(tmp_path / "rtv1.db")
+        store.add_claim("Test claim.", source_pointer="test", trust_tier="operator")
+        from memorant.retriever import FTSRetriever
+        retriever = FTSRetriever(tmp_path / "rtv1.db")
+        with pytest.raises(ValueError):
+            retriever.search("Test", min_trust="bogus")
+
+    def test_search_debug_invalid_min_trust_raises(self, tmp_path):
+        store = MemorantStore(tmp_path / "rtv2.db")
+        store.add_claim("Test claim.", source_pointer="test", trust_tier="operator")
+        from memorant.retriever import FTSRetriever
+        retriever = FTSRetriever(tmp_path / "rtv2.db")
+        with pytest.raises(ValueError):
+            retriever.search_debug("Test", min_trust="bogus")

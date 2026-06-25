@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from memorant._vendor.steward import Steward
+from memorant._vendor.sqlcipher import apply_key
 
 from .compressor import _extract_text
 from .errors import RecoveryCorruptionError
@@ -148,7 +149,7 @@ class RecoveryStore:
         if self._encryption_key:
             import sqlcipher3
             db = sqlcipher3.connect(str(self.db_path))
-            db.execute(f"PRAGMA key = '{self._encryption_key}'")
+            apply_key(db, self._encryption_key)
         else:
             db = sqlite3.connect(str(self.db_path))
 

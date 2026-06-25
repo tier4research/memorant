@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from ._vendor.sqlcipher import apply_key
+
 
 @dataclass(frozen=True)
 class SearchResult:
@@ -81,7 +83,7 @@ class FTSRetriever:
         if self._encryption_key:
             import sqlcipher3
             db = sqlcipher3.connect(str(self.db_path))
-            db.execute(f"PRAGMA key = '{self._encryption_key}'")
+            apply_key(db, self._encryption_key)
         else:
             db = sqlite3.connect(str(self.db_path))
         db.row_factory = sqlite3.Row
@@ -137,6 +139,8 @@ class FTSRetriever:
 
         fts_query = self._fts_query(query)
         trust_ranks = {"operator": 0, "verified": 1, "derived": 2, "untrusted": 3}
+        if min_trust and min_trust not in trust_ranks:
+            raise ValueError(f"Invalid min_trust: {min_trust}")
 
         with self._connect() as db:
             # Use FTS5 BM25 for ranking with join to claim_units
@@ -168,7 +172,7 @@ class FTSRetriever:
                 sql += " AND c.trust_tier IN ("
                 allowed = [
                     t for t in trust_ranks
-                    if trust_ranks[t] <= trust_ranks.get(min_trust, 3)
+                    if trust_ranks[t] <= trust_ranks[min_trust]
                 ]
                 sql += ",".join("?" for _ in allowed) + ")"
                 params.extend(allowed)

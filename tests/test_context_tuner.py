@@ -1675,3 +1675,33 @@ class TestCompressionDebug:
         assert debug.protected_message_count == 2
         assert "system" in debug.preserved_roles
         assert tuner.decompress(debug.result.recovery_id) == messages
+
+
+
+class TestCompressionBudgetRegression:
+    def test_exact_protected_budget_drops_summaries(self):
+        msgs = [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": "old " * 100},
+        ]
+        max_tokens = count_message_tokens([msgs[0]])
+        outcome = compress_messages_detailed(msgs, max_tokens=max_tokens, keep_last_n=0)
+
+        assert outcome.within_budget is True
+        assert outcome.compressed_tokens <= max_tokens
+        assert outcome.messages == [msgs[0]]
+
+    def test_compression_ratio_affects_output_size(self):
+        msgs = [{"role": "system", "content": "s"}]
+        msgs.extend({"role": "user", "content": "word " * 100} for _ in range(5))
+
+        aggressive = compress_messages_detailed(
+            msgs, max_tokens=200, keep_last_n=0, compression_ratio=0.1
+        )
+        relaxed = compress_messages_detailed(
+            msgs, max_tokens=200, keep_last_n=0, compression_ratio=0.9
+        )
+
+        assert aggressive.compressed_tokens < relaxed.compressed_tokens
+        assert aggressive.compressed_tokens <= 200
+        assert relaxed.compressed_tokens <= 200
