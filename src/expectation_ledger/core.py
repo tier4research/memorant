@@ -287,7 +287,7 @@ class ExpectationLedger:
                 ))
             except sqlite3.IntegrityError as exc:
                 # Duplicate content_hash — reactivate if superseded. Do not
-
+                # swallow other integrity errors (CHECK/FK failures).
                 if "content_hash" not in str(exc):
                     raise
                 existing = db.execute(
@@ -889,16 +889,18 @@ class ExpectationLedger:
 
     # ── Doctor ────────────────────────────────────────────────
 
+    def _integrity_status(self) -> tuple[bool, str]:
+        """Single-pass integrity check for doctor (avoids double PRAGMA)."""
+        ok = self.integrity_check()
+        return ok, "ok" if ok else "corrupt"
+
     def doctor(self, json_output: bool = False) -> int:
         """Run health checks per the Agent Integrity doctor contract."""
         checks = [
             run_check("database_connection", lambda: (True, "connected")),
             run_check(
                 "database_integrity",
-                lambda: (
-                    self.integrity_check(),
-                    "ok" if self.integrity_check() else "corrupt",
-                ),
+                self._integrity_status,
                 degraded_on_error=False,
             ),
             run_check(
