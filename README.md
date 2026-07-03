@@ -5,15 +5,17 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Status: RC](https://img.shields.io/badge/status-rc-yellow.svg)](RELEASE_NOTES.md)
 
-**Memorant is a local-first memory suite for AI agents: trusted long-term
-claims, recoverable context compression, and expectation tracking.**
+**Memorant is a local-first memory suite for AI agents — memory that behaves
+more like a mind than a database: trusted long-term claims, recoverable context
+compression, and expectation tracking.**
 
-Most assistants either forget everything between sessions or remember too much —
-hauling around stale, contradictory notes that quietly push answers in the wrong
-direction. Memorant stores what your agent learns as individual claims, each tagged
-with provenance, an explicit trust tier, and a temporal validity window. When
-something changes, you correct that single fact — so the agent's memory stays
-accurate the longer it runs.
+Most agent memory is a search index or a profile file — you ask, it fetches,
+nothing surfaces on its own, and stale notes quietly push answers in the wrong
+direction. Memorant stores what your agent learns as individual claims, each
+tagged with provenance, an explicit trust tier, and a temporal validity window.
+Relevant claims *resonate* — surfacing as background context based on what's
+happening right now, not only when queried. When something changes, you correct
+that single fact — so the agent's memory stays accurate the longer it runs.
 
 **v1 (release candidate):** ships three coordinated projects:
 
@@ -40,6 +42,33 @@ Use these descriptions for the GitHub About text and any package landing pages:
   long-running AI agent conversations.
 - **Expectation Ledger:** Local-first contract and violation ledger for AI agents,
   with expectation search, run tracking, and evidence.
+
+## How memory behaves
+
+Most agent memory systems are pure retrieval engines: you ask a question, they
+search for matching text, they return results. Memorant adds a second mode —
+memory that *surfaces*:
+
+- **Resonance.** `resonate()` compares the current turn against the memory store
+  and hands back a small, sanitized block of background context — relevant claims
+  surface because of what's happening now, not because you queried for them. Only
+  operator- and verified-tier claims are ever auto-injected.
+- **Arcs (narrative threads).** Claims can be threaded into arcs — ongoing
+  stories with an explicit lifecycle (`active`, `dormant`, `closed`) — so memory
+  captures not just "facts about X" but the *story of X*.
+- **Emotional markers.** Claims can carry emotional markers alongside provenance,
+  preserving how something felt, not just what was said.
+- **Standing state.** Digests are distilled from raw claims and promoted — with
+  review — into standing facts: a compact summary of what's true right now.
+
+## Who it's for
+
+- **Builders of long-running or personal agents** that need memory which survives
+  across sessions and stays trustworthy instead of drifting.
+- **Privacy-conscious and self-hosted setups** — there's no server to send data to;
+  the memory is a file you own and can inspect.
+- **Anyone tired of vector-search guesswork** who wants memory they can read, audit,
+  and correct by hand.
 
 ## v1 at a glance
 
@@ -241,7 +270,7 @@ the database file is exfiltrated separately from the machine's keyring.
 Release candidate (`v1.0.0-rc.1`). Trust tiers, field-aware redaction, atomic
 dedup, FTS5 scoring, relation tracking, digest governance, doctor contract,
 SQLite steward, and optional SQLCipher encryption are all implemented and tested
-(68 tests, 4 skipped pending sqlcipher3 install; 90%+ coverage target on
+(308 tests passing, 4 skipped pending sqlcipher3 install; 90%+ coverage target on
 migration/correction/trust/redaction paths). APIs may still see minor adjustments
 before stable v1.0.0.
 
