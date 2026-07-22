@@ -165,6 +165,11 @@ class MemorantStore:
         self._steward = Steward(self.db_path, encryption_key=self.config.encryption_key)
         self._flight = self.config.flight_recorder
 
+        # Schema version this instance last initialized to. Guards the init()
+        # fast path — never a bare boolean, so a memorant upgrade that adds a
+        # migration (raising the target version) is picked up by a warm store.
+        self._init_version: int | None = None
+
     # ── Connection management ────────────────────────────────
 
     def connect(self) -> sqlite3.Connection:
@@ -209,8 +214,23 @@ class MemorantStore:
         - File exists, primary table present → legacy DB → skip schema, run migrations
         - Already at target version → no-op
         - Newer than target → error (no downgrades)
+
+        Repeat calls on a warm instance take a fast path: when this instance
+        already initialized to the current target version, a single
+        ``PRAGMA user_version`` read confirms the database still matches and
+        the full detection/migration pass is skipped. Any mismatch (upgraded
+        package, replaced or deleted DB file) falls through to the full pass.
         """
         target = max(MIGRATIONS) if MIGRATIONS else 0
+
+        if self._init_version == target and self.db_path.exists():
+            try:
+                with self.connect() as db:
+                    if db.execute("PRAGMA user_version").fetchone()[0] == target:
+                        return list(SCHEMA_V1)
+            except Exception:
+                pass  # unreadable DB — let the full path diagnose it
+            self._init_version = None
 
         # Determine if this is a legacy database by checking for the primary table
         is_legacy = False
@@ -241,6 +261,8 @@ class MemorantStore:
             self._steward.initialize(target)
             for version, sql in sorted(MIGRATIONS.items()):
                 self._steward.add_migration(version, sql)
+
+        self._init_version = target
 
         if self._flight:
             self._flight.record(AgentEvent(

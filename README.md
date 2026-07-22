@@ -210,6 +210,31 @@ result = pre_llm_call_context(user_message, session_id="sess-abc")
 
 A complete Hermes plugin example ships in `examples/hermes_plugin/`.
 
+## Using it as a MemPalace backend
+
+Memorant is a first-class storage backend for
+[MemPalace](https://github.com/MemPalace/mempalace) (3.5+). Install both
+packages and select it per palace:
+
+```bash
+pip install "mempalace[memorant]"
+mempalace mine ~/projects/myapp --backend memorant   # or MEMPALACE_BACKEND=memorant
+```
+
+Every MemPalace drawer write then lands in the Memorant claim store —
+trust-tiered (drawers `verified`), atomically deduplicated, with full
+provenance — while MemPalace keeps its own sidecar vector index.
+Knowledge-graph facts are mirrored as `derived` claims with
+`kg:<fact_id>` pointers, and an Expectation Ledger `expectations.db`
+placed beside the palace validates every write (fail-open by default;
+`MEMPALACE_MEMORANT_FAIL_CLOSED=1` rejects violating writes).
+
+Migrate an existing palace in place with
+`mempalace repair --mode migrate-to-memorant` (round-trip-verified;
+source files archived, never deleted). This integration replaces the
+retired `scripts/patch_mcp_for_memorant.py` hack — see
+[RELEASE_NOTES.md](RELEASE_NOTES.md).
+
 ## Suite workflow
 
 Use the three packages together when an agent needs both continuity and
@@ -271,8 +296,9 @@ Release candidate (`v1.0.0-rc.1`). Trust tiers, field-aware redaction, atomic
 dedup, FTS5 scoring, relation tracking, digest governance, doctor contract,
 SQLite steward, and optional SQLCipher encryption are all implemented and tested
 (308 tests passing, 4 skipped pending sqlcipher3 install; 90%+ coverage target on
-migration/correction/trust/redaction paths). APIs may still see minor adjustments
-before stable v1.0.0.
+migration/correction/trust/redaction paths). MemPalace integration ships from the
+MemPalace side as the `memorant` storage backend (see above). APIs may still see
+minor adjustments before stable v1.0.0.
 
 Deferred to v1.1: full embedding backend, advanced policy configuration, polished
 repair/uninstall workflows.

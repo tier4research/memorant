@@ -1,5 +1,6 @@
 """Comprehensive tests for Memorant v1 — MemorantStore API."""
 
+import gc
 import json
 import sqlite3
 import time
@@ -16,6 +17,24 @@ from memorant.trust import TrustTier, TrustPolicy, redact_content, is_redaction_
 @pytest.fixture
 def store(tmp_path: Path) -> MemorantStore:
     return MemorantStore(tmp_path / "test.db")
+
+
+def _force_resonance_timeout(store: MemorantStore) -> None:
+    """Make the next ``resonate()`` deterministically exceed its deadline.
+
+    The Bug5/Bug2 deadline tests set ``resonance_deadline_ms=1`` and used to
+    rely on the uncached ``init()`` pass inside ``search()`` to overrun it.
+    With schema-version-guarded init caching that pass is near-instant, so a
+    warm store no longer trips a 1 ms deadline by accident — force the overrun
+    explicitly instead of depending on incidental timing.
+    """
+    original = store.search
+
+    def slow(*args, **kwargs):
+        time.sleep(0.01)
+        return original(*args, **kwargs)
+
+    store.search = slow
 
 
 @pytest.fixture
@@ -50,6 +69,51 @@ class TestInit:
         store.init()
         assert store._steward.user_version >= 0
         assert store.integrity_check()
+
+    def test_init_fast_path_skips_full_pass(self, store, monkeypatch):
+        """A warm instance at the current schema version skips detection/migration."""
+        store.init()
+        calls = []
+        monkeypatch.setattr(store._steward, "migrate", lambda: calls.append(1))
+        tables = store.init()
+        assert calls == []  # without the version guard, the legacy path would migrate
+        assert "claim_units" in tables
+
+    def test_init_reruns_after_version_bump(self, store, monkeypatch):
+        """A memorant upgrade (new migration) must not be skipped by a warm store."""
+        from memorant import core as core_mod
+
+        store.init()
+        store.add_claim("warm the instance", source_pointer="test")
+
+        bumped = dict(core_mod.MIGRATIONS)
+        new_version = max(bumped) + 1
+        bumped[new_version] = "CREATE TABLE IF NOT EXISTS _upgrade_probe (id INTEGER);"
+        monkeypatch.setattr(core_mod, "MIGRATIONS", bumped)
+
+        store.init()
+        assert store._steward.user_version == new_version
+        with store.connect() as db:
+            row = db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='_upgrade_probe'"
+            ).fetchone()
+        assert row is not None
+
+    def test_init_reruns_after_db_file_deleted(self, store):
+        """The guard is per-database, not per-instance: a removed file re-inits."""
+        store.init()
+        # ``with self.connect() as db`` commits but does not close, so a
+        # connection lingers until GC — on Windows that holds the file open
+        # and blocks unlink. Reap the leaked connections first.
+        gc.collect()
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(store.db_path) + suffix)
+            if p.exists():
+                p.unlink()
+        tables = store.init()
+        assert "claim_units" in tables
+        cid = store.add_claim("recreated", source_pointer="test")
+        assert store.get_claim(cid) is not None
 
 
 # ── Claim CRUD ────────────────────────────────────────────────
@@ -694,6 +758,7 @@ class TestBug2RetentionModeNone:
         store = MemorantStore(tmp_path / "bug2.db", config=config)
         store.add_claim("Test claim for resonance.", source_pointer="test", trust_tier="verified")
         # With 1ms deadline, resonance should timeout immediately
+        _force_resonance_timeout(store)
         block = store.resonate("test claim", session_id="retention-none-test")
         # Should return empty (timed out)
         assert block == ""
@@ -769,6 +834,7 @@ class TestBug5DeadlineEnforced:
         store.add_claim("Quick claim for deadline test.", source_pointer="test", trust_tier="verified")
         store.add_claim("Another verified claim.", source_pointer="test", trust_tier="verified")
         # With 1ms deadline, should timeout before search completes
+        _force_resonance_timeout(store)
         block = store.resonate("deadline test", session_id="deadline-test")
         # Must return empty (timed out), even though claims exist
         assert block == ""
@@ -778,6 +844,7 @@ class TestBug5DeadlineEnforced:
         config = StoreConfig(resonance_deadline_ms=1)
         store = MemorantStore(tmp_path / "bug5b.db", config=config)
         store.add_claim("Timeout event test claim.", source_pointer="test", trust_tier="verified")
+        _force_resonance_timeout(store)
         store.resonate("timeout event", session_id="deadline-log-test")
         # Should have logged the timeout
         with store.connect() as db:
