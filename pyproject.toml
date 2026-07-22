@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "memorant"
 version = "1.0.0-rc.1"
-description = "Local-first agent memory suite: trusted claims, recoverable context compression, and expectation tracking."
+description = "Trust-tiered memory suite for AI agents: claims with provenance, recoverable context compression, and behavioral expectation tracking."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}

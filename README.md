@@ -5,167 +5,99 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Status: RC](https://img.shields.io/badge/status-rc-yellow.svg)](RELEASE_NOTES.md)
 
-**Memorant is a local-first memory suite for AI agents — memory that behaves
-more like a mind than a database: trusted long-term claims, recoverable context
-compression, and expectation tracking.**
+**Your agent's memory shouldn't be a search index.**
 
-Most agent memory is a search index or a profile file — you ask, it fetches,
-nothing surfaces on its own, and stale notes quietly push answers in the wrong
-direction. Memorant stores what your agent learns as individual claims, each
-tagged with provenance, an explicit trust tier, and a temporal validity window.
-Relevant claims *resonate* — surfacing as background context based on what's
-happening right now, not only when queried. When something changes, you correct
-that single fact — so the agent's memory stays accurate the longer it runs.
+Most "AI memory" systems are just vector databases with a chat wrapper. You ask, they fetch, they return. No provenance. No trust. No way to tell a remembered fact from a hallucinated one. And when the model gets something wrong, you can't fix it — you can only add *more* text and hope it drowns out the mistake.
 
-**v1 (release candidate):** ships three coordinated projects:
+Memorant is different. It stores what your agent knows as **individual claims** — each one tagged with where it came from, how trustworthy it is, and when it's valid. Claims surface on their own when they're relevant (not just when queried). When a fact changes, you correct *that claim* — and the correction propagates atomically to everything that depends on it.
 
-- **Memorant:** a trustworthy long-term claim store with provenance, trust tiers,
-  corrections, temporal validity, retrieval diagnostics, and memory hygiene.
-- **Context Tuner:** recoverable context compression and token-budget control for
-  long-running agent conversations.
-- **Expectation Ledger:** local-first behavioral contracts, run tracking, and
-  violation evidence for agent governance.
+The result is an agent that remembers *better* the longer it runs, instead of accumulating noise.
 
-The core Memorant store adds trust tiers (operator > verified > derived >
-untrusted), field-aware secret redaction, atomic deduplication, FTS5-scored
-retrieval, relation tracking (supersedes/corrects/derived_from), a `doctor --json`
-health contract, and a vendored SQLite steward for safe schema migrations — all
-with zero required dependencies and a single local SQLite file.
-
-## GitHub page descriptions
-
-Use these descriptions for the GitHub About text and any package landing pages:
-
-- **Memorant:** Local-first trusted memory for AI agents: claims, provenance,
-  trust tiers, corrections, and retrieval diagnostics.
-- **Context Tuner:** Recoverable context compression and token-budget control for
-  long-running AI agent conversations.
-- **Expectation Ledger:** Local-first contract and violation ledger for AI agents,
-  with expectation search, run tracking, and evidence.
-
-## How memory behaves
-
-Most agent memory systems are pure retrieval engines: you ask a question, they
-search for matching text, they return results. Memorant adds a second mode —
-memory that *surfaces*:
-
-- **Resonance.** `resonate()` compares the current turn against the memory store
-  and hands back a small, sanitized block of background context — relevant claims
-  surface because of what's happening now, not because you queried for them. Only
-  operator- and verified-tier claims are ever auto-injected.
-- **Arcs (narrative threads).** Claims can be threaded into arcs — ongoing
-  stories with an explicit lifecycle (`active`, `dormant`, `closed`) — so memory
-  captures not just "facts about X" but the *story of X*.
-- **Emotional markers.** Claims can carry emotional markers alongside provenance,
-  preserving how something felt, not just what was said.
-- **Standing state.** Digests are distilled from raw claims and promoted — with
-  review — into standing facts: a compact summary of what's true right now.
-
-## Who it's for
-
-- **Builders of long-running or personal agents** that need memory which survives
-  across sessions and stays trustworthy instead of drifting.
-- **Privacy-conscious and self-hosted setups** — there's no server to send data to;
-  the memory is a file you own and can inspect.
-- **Anyone tired of vector-search guesswork** who wants memory they can read, audit,
-  and correct by hand.
-
-## v1 at a glance
-
-### Trust tiers
-Every claim gets a trust tier: `operator` (manually curated), `verified`
-(cross-referenced), `derived` (computed from other claims), or `untrusted`
-(default). Resonance auto-injects only operator + verified claims — untrusted
-claims stay available for explicit search but never leak into background context.
-
-### Field-aware redaction
-API keys, tokens, passwords, and private keys are redacted with surgical
-precision — only the secret portion is replaced with `[REDACTED:...]`,
-leaving surrounding text intact. Benign terms like "SQL", "debug", and
-"tokenization" are explicitly preserved.
-
-### Atomic deduplication
-`INSERT ... ON CONFLICT DO UPDATE` ensures concurrent writes never create
-duplicates. Identical claims increment a reinforcement counter instead of
-creating new rows — safe under multiple readers/writers (WAL mode).
-
-### FTS5 retrieval with scoring
-Composite scoring: FTS5 rank × log-scaled reinforcement bonus. Stable tie-break
-by claim ID. Trust-filtered at query time — you decide the minimum tier per search.
-
-### Retrieval diagnostics and hygiene
-`search_debug` exposes raw FTS rank, normalized relevance, reinforcement,
-recency, and final score. `hygiene` reports stale claims, broken derivation
-chains, duplicate groups, simple contradiction candidates, and untrusted claims
-that deserve review.
-
-### Relation tracking
-`supersedes`, `corrects`, and `derived_from` tables with enforced foreign keys.
-Correction propagation is transactional — invalidate an old claim, create the new
-one, and record the relation in one atomic operation.
-
-### Digest governance
-Digest states are explicit `TEXT` enums: `pending`, `promoted`, `rejected`.
-Promotion uses temp-file → flush → atomic replace → state update — no partial writes.
-
-### Doctor contract
-Every Tier 4 component implements `doctor --json`:
-```json
-{"component": "memorant", "status": "healthy", "checks": [...], "timestamp": "..."}
-```
-Exit codes: 0 = healthy, 1 = degraded, 2 = unhealthy.
-
-### SQLite steward (vendored)
-Dependency-free schema migration manager bundled in `_vendor/`:
-pre-migration integrity check, timestamped backup, ordered transactional
-migrations, canary-based interrupted-migration recovery.
+> **v1.0.0-rc.1** ships three coordinated tools that work together or standalone:
+>
+> - **Memorant** — long-term claim store with trust tiers, provenance, corrections, and temporal validity
+> - **Context Tuner** — recoverable compression and token-budget control for long-running conversations (also [available separately](https://github.com/tier4research/hermes-context-tuner))
+> - **Expectation Ledger** — behavioral contracts, run tracking, and violation evidence for agent governance
 
 ---
 
-## How Memorant compares
+## The problem with agent memory today
 
-| Capability | Memorant v1 | Holographic (Hermes) | MemPalace (upstream) | Cloud memory |
-|---|---|---|---|---|
-| Runs entirely local | ✓ | ✓ | ✓ | ✗ |
-| Zero required dependencies | ✓ | — | — | ✗ |
-| Trust tiers (operator/verified/derived/untrusted) | ✓ | — | — | — |
-| Field-aware secret redaction | ✓ | — | — | — |
-| Atomic dedup (INSERT ON CONFLICT) | ✓ | — | — | — |
-| Temporal validity (valid_from/valid_until) | ✓ | — | ✓ | — |
-| Queries respect "as of" date | ✓ | — | — | — |
-| Correction propagation (supersedes/corrects/derived_from) | ✓ | — | — | — |
-| Reviewable digests (diff → approve/reject) | ✓ | — | — | — |
-| Doctor --json health contract | ✓ | — | — | — |
-| SQLite steward (safe migrations) | ✓ | — | — | — |
-| FTS5 composite scoring | ✓ | ✓ | ✓ | ✗ |
-| No LLM on the memory path | ✓ | ✓ | ✓ | ✗ |
-| Single-file SQLite | ✓ | ✓ | ✓ | — |
+Most agent memory isn't memory — it's *retrieval*. You dump everything into a vector store, query by similarity, and hope the right chunk comes back. The model doesn't distinguish between a confirmed fact and a guess. Stale information sits forever. Corrections don't propagate. And no one can audit what the agent actually *knows* versus what it's just statistically predicting.
+
+- **No trust model.** Every piece of memory is treated equally. A user's offhand comment carries the same weight as a verified setting. There's no way to say "this is confirmed" vs "this is a guess."
+- **No corrections.** The model can't unlearn. You can add contradictory information, but the old wrong fact is still there. How does the agent decide which to trust?
+- **No governance.** Want to enforce "this agent must never store API keys"? You'd need to add that logic yourself, in your own application layer. There's no contract system.
+- **No provenance.** Where did a piece of memory come from? Was it observed, inferred, or explicitly told? Good luck figuring that out from a vector embedding.
+- **No temporal awareness.** When was this fact learned? Is it still valid? Memory systems that don't track time can't age out stale information.
+
+## How Memorant fixes it
+
+Memorant treats memory like a **knowledge base**, not a search index. Every claim is a first-class entity with metadata that governs how it's used:
+
+| Problem | How Memorant solves it |
+|---------|----------------------|
+| **No trust model** | Every claim has an explicit tier: `operator`, `verified`, `derived`, or `untrusted`. Resonance auto-injects only operator + verified — untrusted claims stay available for search but never leak into background context. |
+| **No corrections** | `correct_claim()` atomically invalidates the old claim, creates the corrected one, and records the `corrects` relation. Supersession chains let you trace the full history. |
+| **No governance** | Expectation Ledger stores behavioral contracts and records violations with evidence. Deterministic expectations can even reject violating writes (fail-closed mode). |
+| **No provenance** | Every claim carries a `source_pointer`, `source_type`, and timestamp. You know exactly where each fact came from. |
+| **No temporal awareness** | `valid_from` / `valid_until` on every claim. Queries can be scoped to "what was true at this point in time." |
+| **No dedup** | Identical claims auto-merge via `INSERT ON CONFLICT`, incrementing a reinforcement counter. Same fact from multiple sources = stronger signal, not duplicate rows. |
+| **No audits** | `doctor --json` exposes health checks. `hygiene` reports stale claims, broken derivation chains, and contradiction candidates. Every operation leaves a trace. |
 
 ---
 
-## Install
+## What makes Memorant unique
+
+**Trust tiers.** No other open-source memory system has them. You can literally say "this claim was verified by a human, that one was inferred by the model, and those three were overheard in a noisy conversation — treat them accordingly." Resonance respects these tiers automatically. A claim has to earn its way into your agent's active context.
+
+**Zero dependencies.** Memorant has *no* required pip dependencies. Not numpy, not sentence-transformers, not chromadb. It's a single SQLite file with FTS5. You can `pip install memorant` on a bare Python install and it works. No GPU. No vector server. No 400MB dependency tree.
+
+**Dependency-free doesn't mean primitive.** FTS5 ranking, atomic dedup, trust-tiered retrieval, field-aware secret redaction, relation tracking (supersedes/corrects/derived_from), temporal scope, hygiene reports, a doctor/health contract, and safe schema migrations — all in a zero-dependency package.
+
+**Correction propagation.** When you correct a claim, the old one is invalidated, the new one is created, and all relations are updated in a single atomic operation. Anything that `derived_from` the old claim is flagged for review. This is how memory should work: fix one fact, and the system knows the downstream effects need attention.
+
+**The Expectation Ledger.** Not just memory — governance. Define behavioral contracts ("no storage of secrets without redaction", "every API call must be logged"), evaluate them deterministically, and record violations with evidence. Your agent doesn't just remember; it's accountable.
+
+**First-class MemPalace backend.** Memorant ships as a pluggable storage backend for [MemPalace](https://github.com/MemPalace/mempalace) (v3.5+). Every drawer write lands in the claim store with trust tiers and provenance, while MemPalace keeps its own vector index for search speed. Best of both worlds.
+
+---
+
+## At a glance
+
+| Feature | What it does |
+|---------|-------------|
+| Trust tiers | `operator` > `verified` > `derived` > `untrusted` — resonance auto-injects only top tiers |
+| Field-aware redaction | Secret values replaced with `[REDACTED:...]`; benign terms like `tokenization` preserved |
+| Atomic dedup | `INSERT ON CONFLICT` — identical claims increment a reinforcement counter instead of duplicating |
+| FTS5 scoring | Rank × log(reinforcement) — stable tie-break by claim ID; trust-filtered at query time |
+| Temporal validity | `valid_from` / `valid_until` — query "as of" any date |
+| Correction propagation | `correct_claim()` → invalidates old, creates new, records `corrects` relation — atomic |
+| Relation tracking | `supersedes`, `corrects`, `derived_from` — full audit trail |
+| Digest governance | `pending` → `promoted` / `rejected` — atomic promotion with temp-file + state update |
+| Doctor contract | `doctor --json` → exit code 0/1/2, component status, check list |
+| Hygiene reports | Stale claims, broken derivation chains, contradiction candidates, untrusted claims needing review |
+| SQLite steward | Vendored schema migration manager — pre-migration integrity checks, backups, canary-based recovery |
+| Zero dependencies | Pure Python + stdlib + bundled vendored steward |
+| Optional encryption | SQLCipher support via `pip install memorant[encryption]` — fail-closed, wrong key = can't open |
+| MemPalace backend | `--backend memorant` — writes go through trust tiers + provenance; vector index in sidecar (no memorant deps on chromadb) |
+| Expectation Ledger | Behavioral contracts, deterministic evaluation, violation recording, fail-closed option |
+
+---
+
+## Quick start
 
 ```bash
-git clone https://github.com/tier4research/memorant.git
-cd memorant
-pip install .
-```
+# Install
+pip install memorant
 
-For development: `pip install -e ".[test]"`.
-
-## Quick start (CLI)
-
-```bash
+# CLI
 memorant init --db ./memorant.db
-memorant add "The user prefers concise technical summaries." --db ./memorant.db --source demo --trust verified
+memorant add "The user prefers concise technical summaries." --db ./memorant.db --source manual --trust verified
 memorant search "technical summaries" --db ./memorant.db --min-trust verified
 memorant resonate "How should I answer this?" --db ./memorant.db
-memorant stats --db ./memorant.db
 memorant doctor --json --db ./memorant.db
-memorant backup --db ./memorant.db
 ```
-
-## Python usage
 
 ```python
 from memorant import MemorantStore, StoreConfig, TrustPolicy
@@ -178,7 +110,7 @@ policy = TrustPolicy(rules=[
 store = MemorantStore("memorant.db", StoreConfig(trust_policy=policy))
 store.init()
 
-# Add a claim with explicit trust tier
+# Add a claim
 cid = store.add_claim("The user prefers direct answers.", source_pointer="manual", trust_tier="operator")
 
 # Search with trust filtering
@@ -186,59 +118,21 @@ results = store.search("user preference", min_trust="verified")
 for r in results:
     print(f"[{r.trust_tier}] {r.score:.3f} | {r.content}")
 
-# Resonance (auto-injects only operator + verified claims)
+# Resonance — claims surface on their own
 context = store.resonate("What style should I use?", session_id="sess-1")
 
-# Correct a claim
+# Correct a claim — atomic, propagates
 new_id = store.correct_claim(cid, "The user prefers thorough, evidence-backed answers.")
 
 # Health check
 store.doctor(json_output=True)
 ```
 
-## Using it with your agent
-
-Memorant runs in the step just before your agent calls its model, and hands back
-a small, sanitized block of context. The Hermes adapter is one line:
-
-```python
-from memorant.adapters.hermes import pre_llm_call_context
-
-result = pre_llm_call_context(user_message, session_id="sess-abc")
-# → {"context": "[MEMORANT_RESONANCE]\n- ..."}
-```
-
-A complete Hermes plugin example ships in `examples/hermes_plugin/`.
-
-## Using it as a MemPalace backend
-
-Memorant is a first-class storage backend for
-[MemPalace](https://github.com/MemPalace/mempalace) (3.5+). Install both
-packages and select it per palace:
-
-```bash
-pip install "mempalace[memorant]"
-mempalace mine ~/projects/myapp --backend memorant   # or MEMPALACE_BACKEND=memorant
-```
-
-Every MemPalace drawer write then lands in the Memorant claim store —
-trust-tiered (drawers `verified`), atomically deduplicated, with full
-provenance — while MemPalace keeps its own sidecar vector index.
-Knowledge-graph facts are mirrored as `derived` claims with
-`kg:<fact_id>` pointers, and an Expectation Ledger `expectations.db`
-placed beside the palace validates every write (fail-open by default;
-`MEMPALACE_MEMORANT_FAIL_CLOSED=1` rejects violating writes).
-
-Migrate an existing palace in place with
-`mempalace repair --mode migrate-to-memorant` (round-trip-verified;
-source files archived, never deleted). This integration replaces the
-retired `scripts/patch_mcp_for_memorant.py` hack — see
-[RELEASE_NOTES.md](RELEASE_NOTES.md).
+---
 
 ## Suite workflow
 
-Use the three packages together when an agent needs both continuity and
-governance:
+The three packages work together for end-to-end agent memory governance:
 
 ```python
 from memorant import MemorantStore
@@ -258,14 +152,52 @@ prepared = cycle.prepare(
 )
 ```
 
-This keeps short-term compression separate from trusted long-term memory:
-compression can produce review candidates, but it does not automatically promote
-summaries into Memorant claims.
+This keeps short-term compression (Context Tuner) separate from trusted long-term memory (Memorant), with the Expectation Ledger governing both.
 
-## Encryption (optional)
+---
 
-Memorant supports SQLCipher encryption for the local database. It's off by
-default — standard SQLite is used unless you opt in.
+## MemPalace integration
+
+As a MemPalace storage backend, every write lands in the Memorant claim store — trust-tiered, deduplicated, with full provenance:
+
+```bash
+pip install "mempalace[memorant]"
+mempalace mine ~/projects/myapp --backend memorant   # or MEMPALACE_BACKEND=memorant
+```
+
+Migrate existing palaces:
+```bash
+mempalace repair --mode migrate-to-memorant
+```
+
+This replaces the retired `scripts/patch_mcp_for_memorant.py` hack. See [RELEASE_NOTES.md](RELEASE_NOTES.md).
+
+---
+
+## Comparison
+
+| Capability | Memorant | Holographic (Hermes) | MemPalace | Cloud memory |
+|---|---|---|---|---|
+| Runs entirely local | ✓ | ✓ | ✓ | ✗ |
+| Zero required dependencies | ✓ | — | — | ✗ |
+| Trust tiers | ✓ | — | — | — |
+| Field-aware secret redaction | ✓ | — | — | — |
+| Atomic dedup | ✓ | — | — | — |
+| Temporal validity | ✓ | — | ✓ | — |
+| Query "as of" date | ✓ | — | — | — |
+| Correction propagation | ✓ | — | — | — |
+| Reviewable digests | ✓ | — | — | — |
+| Doctor/health contract | ✓ | — | — | — |
+| Expectation Ledger | ✓ | — | — | — |
+| FTS5 composite scoring | ✓ | ✓ | ✓ | ✗ |
+| No LLM on memory path | ✓ | ✓ | ✓ | ✗ |
+| Single-file SQLite | ✓ | ✓ | ✓ | — |
+
+---
+
+## Encryption
+
+Optional SQLCipher support:
 
 ```bash
 pip install memorant[encryption]
@@ -273,48 +205,21 @@ pip install memorant[encryption]
 
 ```python
 from memorant import MemorantStore, StoreConfig
-
-store = MemorantStore(
-    "encrypted.db",
-    StoreConfig(encryption_key="your-strong-passphrase")
-)
+store = MemorantStore("encrypted.db", StoreConfig(encryption_key="your-strong-passphrase"))
 ```
 
-- **Fail-closed**: if `encryption_key` is set but `sqlcipher3` isn't installed,
-  Memorant raises `ImportError` rather than silently writing in plaintext.
-- **Wrong key → can't open**: SQLCipher rejects incorrect keys at the database
-  level. No fallback to unencrypted mode.
-- **No key → standard SQLite**: backward-compatible, zero overhead.
+Fail-closed: wrong key → can't open. No key → standard SQLite. Zero overhead unless you opt in.
 
-We recommend **full-disk encryption** (BitLocker/FileVault/LUKS) as the first
-line of defense regardless. SQLCipher adds defense-in-depth for scenarios where
-the database file is exfiltrated separately from the machine's keyring.
+---
 
 ## Project status
 
-Release candidate (`v1.0.0-rc.1`). Trust tiers, field-aware redaction, atomic
-dedup, FTS5 scoring, relation tracking, digest governance, doctor contract,
-SQLite steward, and optional SQLCipher encryption are all implemented and tested
-(308 tests passing, 4 skipped pending sqlcipher3 install; 90%+ coverage target on
-migration/correction/trust/redaction paths). MemPalace integration ships from the
-MemPalace side as the `memorant` storage backend (see above). APIs may still see
-minor adjustments before stable v1.0.0.
+**Release candidate** (v1.0.0-rc.1). 308 tests passing, 90%+ coverage on migration/correction/trust/redaction paths. MemPalace backend integration ships from the MemPalace side. APIs stable with minor adjustments expected before v1.0.0.
 
-Deferred to v1.1: full embedding backend, advanced policy configuration, polished
-repair/uninstall workflows.
+Deferred to v1.1: full embedding backend, advanced policy configuration, polished repair workflows.
 
-## Lineage & credit
-
-Memorant is an independent implementation, but its design is directly indebted to the
-open-source memory-palace ecosystem for AI agents. See `NOTICE.md` for the upstream
-projects credited and the specific concepts borrowed.
+---
 
 ## License
 
 Apache License 2.0. See `LICENSE` and `NOTICE.md`.
-
-## Contributing and security
-
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
-the development workflow. Please report security-sensitive problems using the
-private process in [SECURITY.md](SECURITY.md), not a public issue.
