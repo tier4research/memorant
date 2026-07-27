@@ -11,6 +11,8 @@ build/
 dist/
 *.egg-info/
 *.report.md
+AUDIT_*.md
+IMPLEMENTATION_REPORT.md
 _audit_*.py
 .coverage
 .coveragerc

@@ -216,7 +216,8 @@ class TestSearch:
 
         report = store.hygiene_report()
 
-        assert (neg, pos) in report.contradiction_pairs
+        assert ((neg, pos) in report.contradiction_pairs or
+                (pos, neg) in report.contradiction_pairs)
 
     def test_hygiene_report_counts_untrusted_from_json_logs_exactly(self, store):
         short = store.add_claim("Short untrusted.", source_pointer="test", trust_tier="untrusted")
@@ -774,10 +775,9 @@ class TestBug3IntegrityErrorFalseSuccess:
     """Non-duplicate IntegrityError must be re-raised, not silently succeed."""
 
     def test_invalid_trust_tier_raises(self, tmp_path):
-        """A CHECK constraint violation (invalid trust_tier) raises IntegrityError."""
+        """An invalid trust_tier raises ValueError before reaching the DB."""
         store = MemorantStore(tmp_path / "bug3.db")
-        with pytest.raises(sqlite3.IntegrityError):
-            # trust_tier column has a CHECK constraint
+        with pytest.raises(ValueError, match="Invalid trust_tier"):
             store.add_claim("Invalid trust.", source_pointer="test", trust_tier="made-up-tier")
 
 

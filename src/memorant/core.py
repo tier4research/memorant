@@ -250,6 +250,10 @@ class MemorantStore:
             self._steward.initialize(target)
             for version, sql in sorted(MIGRATIONS.items()):
                 self._steward.add_migration(version, sql)
+            # Normalize columns before migration 8 (handles legacy pre-migration
+            # tables that lack columns added after the SCHEMA_V1 CREATE TABLE was
+            # frozen but never backfilled via ALTER TABLE).
+            self._normalize_claim_unit_columns()
             self._steward.migrate()
         else:
             # Fresh DB (or pre-created empty file): create schema, set version
@@ -276,6 +280,52 @@ class MemorantStore:
             ).to_dict())
 
         return list(SCHEMA_V1)
+
+    def _normalize_claim_unit_columns(self) -> None:
+        """Add columns that exist in SCHEMA_V1 but not in the legacy table.
+
+        Migration 8 rebuilds ``claim_units`` with a ``SELECT *`` and relies on
+        every column being present.  Pre-migration schemas (v0 alpha) lack
+        columns that were added to ``SCHEMA_V1`` but never backfilled via ALTER
+        TABLE.  This fills the gap by trying each column and silently skipping
+        duplicates.  Only ALTER-compatible column constraints are used (no
+        CHECK — SQLite does not allow them in ALTER TABLE ADD COLUMN).
+        """
+        # Columns that may be missing from legacy schemas, with ALTER-compatible
+        # definitions (no CHECK constraints — SQLite rejects them in ADD COLUMN).
+        legacy_cols: list[tuple[str, str]] = [
+            ("fact_refs", "TEXT DEFAULT '[]'"),
+            ("source_type", "TEXT DEFAULT 'manual'"),
+            ("first_encoded", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+            ("last_touched", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+            ("reinforcement_count", "INTEGER DEFAULT 0"),
+            ("emotional_markers", "TEXT DEFAULT '[]'"),
+            ("is_valid", "INTEGER DEFAULT 1"),
+            ("valid_from", "TEXT"),
+            ("valid_until", "TEXT"),
+            ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+            ("updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+        ]
+
+        existing: set[str] = set()
+        try:
+            with self.connect() as db:
+                rows = db.execute("PRAGMA table_info(claim_units)").fetchall()
+                existing = {r["name"] for r in rows}
+        except Exception:
+            return  # Table doesn't exist yet — fresh DB
+
+        missing = [(n, d) for n, d in legacy_cols if n not in existing]
+        if not missing:
+            return
+
+        with self.connect() as db:
+            for col_name, col_def in missing:
+                try:
+                    db.execute(f"ALTER TABLE claim_units ADD COLUMN {col_name} {col_def}")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
 
     # ── Claim CRUD ───────────────────────────────────────────
 
