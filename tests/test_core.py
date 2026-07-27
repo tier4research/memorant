@@ -1024,3 +1024,23 @@ class TestLegacyMigrationPartialTables:
         }
         found = set(tables)
         assert expected <= found, f"Missing: {expected - found}"
+
+
+class TestMigration8ReactivateInvalidated:
+    """Schema migration 8: invalidated claims can be re-added as new active claims."""
+
+    def test_reactivate_invalidated_claim(self, tmp_path):
+        """An invalidated claim with the same content_hash creates a new active claim."""
+        store = MemorantStore(tmp_path / "reactivate.db")
+        cid1 = store.add_claim("Same content", source_pointer="test", trust_tier="verified")
+        store.invalidate_claim(cid1)
+
+        cid2 = store.add_claim("Same content", source_pointer="test", trust_tier="verified")
+        assert cid1 != cid2, "Should create new ID, not reuse"
+
+        c1 = store.get_claim(cid1)
+        # get_claim returns None for invalidated claims (is_valid=0 filter)
+        assert c1 is None, "Original should be invalidated and not retrievable"
+
+        c2 = store.get_claim(cid2)
+        assert c2 is not None, "New claim should be retrievable and active"

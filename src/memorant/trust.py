@@ -124,18 +124,12 @@ def redact_content(content: str) -> str:
 
     Unlike the alpha's sanitize_line (which dropped entire lines containing
     leak markers), this performs targeted redaction on just the secret portions
-    of the text. Benign terms like 'SQL', 'debug', and 'tokenization' survive.
+    of the text.
     """
     result = content
 
     for pattern, replacement_fn in _SECRET_PATTERNS:
-        # Check if the captured secret value contains benign terms —
-        # if so, skip redaction for that specific match.
-        # Patterns without capture groups skip the benign check.
-        def _safe_replacement(m):
-            return replacement_fn(m)
-
-        result = pattern.sub(_safe_replacement, result)
+        result = pattern.sub(replacement_fn, result)
 
     # Truncate long lines but preserve meaning
     if len(result) > 240:

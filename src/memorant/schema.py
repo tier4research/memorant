@@ -247,7 +247,18 @@ MIGRATIONS = {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        INSERT INTO claim_units_v2 SELECT * FROM claim_units;
+        INSERT INTO claim_units_v2 (
+            id, content, content_hash, fact_refs, source_type,
+            source_pointer, trust_tier, first_encoded, last_touched,
+            reinforcement_count, emotional_markers, is_valid,
+            valid_from, valid_until, created_at, updated_at
+        )
+        SELECT
+            id, content, content_hash, fact_refs, source_type,
+            source_pointer, trust_tier, first_encoded, last_touched,
+            reinforcement_count, emotional_markers, is_valid,
+            valid_from, valid_until, created_at, updated_at
+        FROM claim_units;
         DROP TABLE claim_units;
         ALTER TABLE claim_units_v2 RENAME TO claim_units;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_claim_content_hash_active
