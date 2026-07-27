@@ -1,65 +1,108 @@
 # Memorant
 
-[![Tests](https://github.com/tier4research/memorant/actions/workflows/tests.yml/badge.svg)](https://github.com/tier4research/memorant/actions/workflows/tests.yml)
+[![Tests](https://img.shields.io/badge/tests-308%20passing-brightgreen)](https://github.com/tier4research/memorant/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Status: RC](https://img.shields.io/badge/status-rc-yellow.svg)](RELEASE_NOTES.md)
 
-**Your agent's memory shouldn't be a search index.**
+**Agent memory that knows where every fact came from — one SQLite file, zero dependencies.**
 
-Most "AI memory" systems are just vector databases with a chat wrapper. You ask, they fetch, they return. No provenance. No trust. No way to tell a remembered fact from a hallucinated one. And when the model gets something wrong, you can't fix it — you can only add *more* text and hope it drowns out the mistake.
+Memorant stores what your agent knows as individual **claims**. Each claim records its
+source, how far you trust that source, and the window of time it was true. When a fact
+turns out to be wrong, you correct *that claim*: Memorant invalidates the old version,
+links the two, and flags everything derived from it for review.
 
-Memorant is different. It stores what your agent knows as **individual claims** — each one tagged with where it came from, how trustworthy it is, and when it's valid. Claims surface on their own when they're relevant (not just when queried). When a fact changes, you correct *that claim* — and the correction propagates atomically to everything that depends on it.
+It installs on a bare Python interpreter. No embedding model, no vector server, no GPU,
+no 400 MB dependency tree — SQLite with FTS5 and the standard library.
 
-The result is an agent that remembers *better* the longer it runs, instead of accumulating noise.
+```bash
+pip install memorant
 
-> **v1.0.0-rc.1** ships three coordinated tools that work together or standalone:
->
-> - **Memorant** — long-term claim store with trust tiers, provenance, corrections, and temporal validity
-> - **Context Tuner** — recoverable compression and token-budget control for long-running conversations (also [available separately](https://github.com/tier4research/hermes-context-tuner))
-> - **Expectation Ledger** — behavioral contracts, run tracking, and violation evidence for agent governance
+memorant init --db ./memorant.db
+memorant add "Deploys go out Thursdays." --source manual --trust verified --db ./memorant.db
+memorant search "deploy schedule" --min-trust verified --db ./memorant.db
+```
+
+## Why not just use a vector store?
+
+For pure recall, use one — Memorant isn't trying to beat a vector index at similarity
+search. It solves the problem that shows up *after* recall works: what to do when a
+stored fact is wrong, stale, or was never reliable to begin with.
+
+A vector store has one move for a bad fact: add a contradicting chunk and hope the
+embedding wins. Nothing marks the old chunk as retracted. Nothing records that three
+other memories were built on top of it. Nothing distinguishes "the user told me this"
+from "the model guessed this at 2am."
+
+Here's the same situation in Memorant:
+
+```python
+from memorant import MemorantStore
+
+store = MemorantStore("memory.db")
+store.init()
+
+# The agent infers something. It's a guess, and it's stored as one.
+guess = store.add_claim(
+    "The user deploys on Fridays.",
+    source_pointer="inferred:session-41",
+    trust_tier="derived",
+)
+
+# Later, the user says otherwise. That's operator-tier truth.
+store.correct_claim(guess, "The user deploys on Thursdays.")
+```
+
+After the correction:
+
+- the Friday claim is invalidated, not deleted — the history stays auditable
+- a `corrects` relation links old to new
+- anything with `derived_from` pointing at the old claim is flagged for review
+- background retrieval stops surfacing the retracted version immediately
+
+That's the whole pitch. Everything below is detail.
 
 ---
 
-## The problem with agent memory today
+## What a claim looks like
 
-Most agent memory isn't memory — it's *retrieval*. You dump everything into a vector store, query by similarity, and hope the right chunk comes back. The model doesn't distinguish between a confirmed fact and a guess. Stale information sits forever. Corrections don't propagate. And no one can audit what the agent actually *knows* versus what it's just statistically predicting.
+```json
+{
+  "id": "clm_7a3f",
+  "content": "Deploys go out Thursdays.",
+  "trust_tier": "operator",
+  "source_type": "manual",
+  "source_pointer": "chat:2026-03-04",
+  "valid_from": "2026-03-04",
+  "valid_until": null,
+  "reinforcement": 3,
+  "relations": [
+    {"type": "corrects", "target": "clm_2b91"}
+  ]
+}
+```
 
-- **No trust model.** Every piece of memory is treated equally. A user's offhand comment carries the same weight as a verified setting. There's no way to say "this is confirmed" vs "this is a guess."
-- **No corrections.** The model can't unlearn. You can add contradictory information, but the old wrong fact is still there. How does the agent decide which to trust?
-- **No governance.** Want to enforce "this agent must never store API keys"? You'd need to add that logic yourself, in your own application layer. There's no contract system.
-- **No provenance.** Where did a piece of memory come from? Was it observed, inferred, or explicitly told? Good luck figuring that out from a vector embedding.
-- **No temporal awareness.** When was this fact learned? Is it still valid? Memory systems that don't track time can't age out stale information.
+## Trust tiers
 
-## How Memorant fixes it
+Four tiers, highest to lowest: `operator`, `verified`, `derived`, `untrusted`.
 
-Memorant treats memory like a **knowledge base**, not a search index. Every claim is a first-class entity with metadata that governs how it's used:
+Trust is assigned by *provenance*, not by fact-checking. You declare a policy mapping
+sources to tiers, and Memorant enforces it consistently everywhere afterward.
 
-| Problem | How Memorant solves it |
-|---------|----------------------|
-| **No trust model** | Every claim has an explicit tier: `operator`, `verified`, `derived`, or `untrusted`. Resonance auto-injects only operator + verified — untrusted claims stay available for search but never leak into background context. |
-| **No corrections** | `correct_claim()` atomically invalidates the old claim, creates the corrected one, and records the `corrects` relation. Supersession chains let you trace the full history. |
-| **No governance** | Expectation Ledger stores behavioral contracts and records violations with evidence. Deterministic expectations can even reject violating writes (fail-closed mode). |
-| **No provenance** | Every claim carries a `source_pointer`, `source_type`, and timestamp. You know exactly where each fact came from. |
-| **No temporal awareness** | `valid_from` / `valid_until` on every claim. Queries can be scoped to "what was true at this point in time." |
-| **No dedup** | Identical claims auto-merge via `INSERT ON CONFLICT`, incrementing a reinforcement counter. Same fact from multiple sources = stronger signal, not duplicate rows. |
-| **No audits** | `doctor --json` exposes health checks. `hygiene` reports stale claims, broken derivation chains, and contradiction candidates. Every operation leaves a trace. |
+```python
+from memorant import TrustPolicy
 
----
+policy = TrustPolicy(rules=[
+    {"source_type": "manual",     "tier": "verified"},
+    {"source_type": "correction", "tier": "operator"},
+])
+```
 
-## What makes Memorant unique
-
-**Trust tiers.** No other open-source memory system has them. You can literally say "this claim was verified by a human, that one was inferred by the model, and those three were overheard in a noisy conversation — treat them accordingly." Resonance respects these tiers automatically. A claim has to earn its way into your agent's active context.
-
-**Zero dependencies.** Memorant has *no* required pip dependencies. Not numpy, not sentence-transformers, not chromadb. It's a single SQLite file with FTS5. You can `pip install memorant` on a bare Python install and it works. No GPU. No vector server. No 400MB dependency tree.
-
-**Dependency-free doesn't mean primitive.** FTS5 ranking, atomic dedup, trust-tiered retrieval, field-aware secret redaction, relation tracking (supersedes/corrects/derived_from), temporal scope, hygiene reports, a doctor/health contract, and safe schema migrations — all in a zero-dependency package.
-
-**Correction propagation.** When you correct a claim, the old one is invalidated, the new one is created, and all relations are updated in a single atomic operation. Anything that `derived_from` the old claim is flagged for review. This is how memory should work: fix one fact, and the system knows the downstream effects need attention.
-
-**The Expectation Ledger.** Not just memory — governance. Define behavioral contracts ("no storage of secrets without redaction", "every API call must be logged"), evaluate them deterministically, and record violations with evidence. Your agent doesn't just remember; it's accountable.
-
-**First-class MemPalace backend.** Memorant ships as a pluggable storage backend for [MemPalace](https://github.com/MemPalace/mempalace) (v3.5+). Every drawer write lands in the claim store with trust tiers and provenance, while MemPalace keeps its own vector index for search speed. Best of both worlds.
+That distinction matters in practice. Background context injection (*resonance* — an
+FTS5 query run against the claim store on every turn, filtered to `operator` +
+`verified`, returning the top N results) only pulls from the top two tiers. A guess
+the model made three sessions ago stays searchable if you go looking for it, but it
+never quietly reappears as though it were established fact.
 
 ---
 
@@ -68,19 +111,18 @@ Memorant treats memory like a **knowledge base**, not a search index. Every clai
 | Feature | What it does |
 |---------|-------------|
 | Trust tiers | `operator` > `verified` > `derived` > `untrusted` — resonance auto-injects only top tiers |
-| Field-aware redaction | Secret values replaced with `[REDACTED:...]`; benign terms like `tokenization` preserved |
-| Atomic dedup | `INSERT ON CONFLICT` — identical claims increment a reinforcement counter instead of duplicating |
-| FTS5 scoring | Rank × log(reinforcement) — stable tie-break by claim ID; trust-filtered at query time |
+| Field-aware redaction | Secret values replaced with `[REDACTED:...]` |
+| Atomic dedup | Identical claims increment a reinforcement counter instead of duplicating |
+| FTS5 scoring | Rank × log(reinforcement) — trust-filtered at query time |
 | Temporal validity | `valid_from` / `valid_until` — query "as of" any date |
 | Correction propagation | `correct_claim()` → invalidates old, creates new, records `corrects` relation — atomic |
 | Relation tracking | `supersedes`, `corrects`, `derived_from` — full audit trail |
-| Digest governance | `pending` → `promoted` / `rejected` — atomic promotion with temp-file + state update |
+| Digest governance | `pending` → `promoted` / `rejected` — atomic promotion |
 | Doctor contract | `doctor --json` → exit code 0/1/2, component status, check list |
-| Hygiene reports | Stale claims, broken derivation chains, contradiction candidates, untrusted claims needing review |
-| SQLite steward | Vendored schema migration manager — pre-migration integrity checks, backups, canary-based recovery |
-| Zero dependencies | Pure Python + stdlib + bundled vendored steward |
-| Optional encryption | SQLCipher support via `pip install memorant[encryption]` — fail-closed, wrong key = can't open |
-| MemPalace backend | `--backend memorant` — writes go through trust tiers + provenance; vector index in sidecar (no memorant deps on chromadb) |
+| Hygiene reports | Stale claims, broken derivation chains, contradiction candidates |
+| SQLite steward | Vendored schema migration manager — pre-migration integrity checks, canary-based recovery |
+| Zero dependencies | Pure Python + stdlib + bundled steward |
+| Optional encryption | SQLCipher support via `pip install memorant[encryption]` |
 | Expectation Ledger | Behavioral contracts, deterministic evaluation, violation recording, fail-closed option |
 
 ---
@@ -130,6 +172,12 @@ store.doctor(json_output=True)
 
 ---
 
+> **v1.0.0-rc.1** ships three coordinated tools that work together or standalone:
+>
+> - **Memorant** — long-term claim store with trust tiers, provenance, corrections, and temporal validity
+> - **Context Tuner** — recoverable compression and token-budget control for long-running conversations (also [available separately](https://github.com/tier4research/hermes-context-tuner))
+> - **Expectation Ledger** — behavioral contracts, run tracking, and violation evidence for agent governance
+
 ## Suite workflow
 
 The three packages work together for end-to-end agent memory governance:
@@ -137,12 +185,12 @@ The three packages work together for end-to-end agent memory governance:
 ```python
 from memorant import MemorantStore
 from memorant.suite import MemoryCycle
-from context_tuner import ContextTuner
+from hermes_context_tuner import ContextTunerEngine
 from expectation_ledger import ExpectationLedger
 
 cycle = MemoryCycle(
     memory=MemorantStore("memory.db"),
-    tuner=ContextTuner("context.db"),
+    tuner=ContextTunerEngine("context.db"),
     ledger=ExpectationLedger("expectations.db"),
 )
 
@@ -156,30 +204,15 @@ This keeps short-term compression (Context Tuner) separate from trusted long-ter
 
 ---
 
-## MemPalace integration
-
-As a MemPalace storage backend, every write lands in the Memorant claim store — trust-tiered, deduplicated, with full provenance:
-
-```bash
-pip install "mempalace[memorant]"
-mempalace mine ~/projects/myapp --backend memorant   # or MEMPALACE_BACKEND=memorant
-```
-
-Migrate existing palaces:
-```bash
-mempalace repair --mode migrate-to-memorant
-```
-
-This replaces the retired `scripts/patch_mcp_for_memorant.py` hack. See [RELEASE_NOTES.md](RELEASE_NOTES.md).
-
----
-
 ## Memorant-Ontology
 
 The `memorant-ontology` package adds automatic entity and relation extraction from
 claims. It runs as a background worker that processes claims through an LLM,
 extracting structured entities (people, projects, tools, concepts) and the
 relationships between them.
+
+**Important:** the core memorant store *never* calls a model. `memorant-ontology` is
+an optional background worker — it's opt-in and runs off the hot path.
 
 ```bash
 pip install memorant-ontology
@@ -200,22 +233,38 @@ Key features:
 
 ## Comparison
 
-| Capability | Memorant | Holographic (Hermes) | MemPalace | Cloud memory |
+| | Memorant | Mem0 | Zep | pgvector / Chroma |
 |---|---|---|---|---|
-| Runs entirely local | ✓ | ✓ | ✓ | ✗ |
-| Zero required dependencies | ✓ | — | — | ✗ |
-| Trust tiers | ✓ | — | — | — |
-| Field-aware secret redaction | ✓ | — | — | — |
-| Atomic dedup | ✓ | — | — | — |
-| Temporal validity | ✓ | — | ✓ | — |
-| Query "as of" date | ✓ | — | — | — |
-| Correction propagation | ✓ | — | — | — |
-| Reviewable digests | ✓ | — | — | — |
-| Doctor/health contract | ✓ | — | — | — |
-| Expectation Ledger | ✓ | — | — | — |
-| FTS5 composite scoring | ✓ | ✓ | ✓ | ✗ |
-| No LLM on memory path | ✓ | ✓ | ✓ | ✗ |
-| Single-file SQLite | ✓ | ✓ | ✓ | — |
+| Runs fully local | ✓ | partial | partial | ✓ |
+| Zero required dependencies | ✓ | ✗ | ✗ | ✗ |
+| Provenance per fact | ✓ | | | ✗ |
+| Trust tiering on retrieval | ✓ | | | ✗ |
+| Atomic correction + propagation | ✓ | | | ✗ |
+| Query "as of" a date | ✓ | | ✓ | ✗ |
+| No LLM call on the memory path | ✓ | ✗ | | ✓ |
+
+Trust tiering on the retrieval path is rare, and I haven't found another zero-dependency system that does it. Some cells above are empty because I haven't verified them — corrections welcome via PR.
+
+Memorant also ships as a pluggable storage backend for [MemPalace](https://github.com/MemPalace/mempalace) (v3.5+). See [MemPalace integration](#mempalace-integration) below.
+
+---
+
+## MemPalace integration
+
+As a MemPalace storage backend, every write lands in the Memorant claim store — trust-tiered, deduplicated, with full provenance:
+
+```bash
+pip install "mempalace[memorant]"
+mempalace mine ~/projects/myapp --backend memorant   # or MEMPALACE_BACKEND=memorant
+```
+
+Migrate existing palaces:
+
+```bash
+mempalace repair --mode migrate-to-memorant
+```
+
+This replaces the retired `scripts/patch_mcp_for_memorant.py` hack. See [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ---
 
@@ -236,11 +285,24 @@ Fail-closed: wrong key → can't open. No key → standard SQLite. Zero overhead
 
 ---
 
+## Evaluation
+
+No comparative benchmark against vector-based memory systems yet — planned before v1.0.
+The project's 308 unit tests (90%+ coverage on migration, correction, trust, and
+redaction paths) verify correctness, but they say nothing about whether claim-based
+memory produces better answers than vector RAG in practice. A 50-question benchmark
+with deliberately poisoned stale facts is the next priority.
+
+Pull requests and discussion are welcome.
+
+---
+
 ## Project status
 
-**Release candidate** (v1.0.0-rc.1). 308 tests passing, 90%+ coverage on migration/correction/trust/redaction paths. MemPalace backend integration ships from the MemPalace side. APIs stable with minor adjustments expected before v1.0.0.
-
-Deferred to v1.1: full embedding backend, advanced policy configuration, polished repair workflows.
+**Release candidate** (v1.0.0-rc.1). APIs are stable; expect minor adjustments before 1.0.
+308 tests, 90%+ coverage on the migration, correction, trust, and redaction paths.
+Not yet benchmarked against vector-based memory systems.
+Deferred to v1.1: embedding backend, advanced policy config, repair workflows.
 
 ---
 
