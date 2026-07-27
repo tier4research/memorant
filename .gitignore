@@ -10,3 +10,10 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+*.report.md
+_audit_*.py
+.coverage
+.coveragerc
+memorant.dead-letter.jsonl
+kimi27fixreport.md
+deepseekreport.md

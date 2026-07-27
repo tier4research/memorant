@@ -174,6 +174,30 @@ This replaces the retired `scripts/patch_mcp_for_memorant.py` hack. See [RELEASE
 
 ---
 
+## Memorant-Ontology
+
+The `memorant-ontology` package adds automatic entity and relation extraction from
+claims. It runs as a background worker that processes claims through an LLM,
+extracting structured entities (people, projects, tools, concepts) and the
+relationships between them.
+
+```bash
+pip install memorant-ontology
+memorant-ontology --db ./memorant.db init
+memorant-ontology --db ./memorant.db worker --limit 10 --rpm 30
+```
+
+Key features:
+- **Entity extraction** — identifies people, places, projects, concepts, tools, organizations, and dates from claim text
+- **Relationship discovery** — builds a knowledge graph of how entities relate
+- **Trust propagation** — entities inherit trust tiers from source claims
+- **Contradiction detection** — flags claims that conflict with existing knowledge
+- **Cost control** — per-claim cost tracking with daily hard stop ($5/day default)
+
+236 tests passing across the extraction, worker, queue, retriever, and normalizer modules.
+
+---
+
 ## Comparison
 
 | Capability | Memorant | Holographic (Hermes) | MemPalace | Cloud memory |

@@ -8,7 +8,7 @@ SCHEMA_V1 = {
         CREATE TABLE IF NOT EXISTS claim_units (
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
-            content_hash TEXT UNIQUE,
+            content_hash TEXT,
             fact_refs TEXT DEFAULT '[]',
             source_type TEXT DEFAULT 'manual',
             source_pointer TEXT NOT NULL,
@@ -24,6 +24,11 @@ SCHEMA_V1 = {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
+    """,
+
+    "idx_claim_content_hash_active": """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_claim_content_hash_active
+        ON claim_units(content_hash) WHERE is_valid = 1
     """,
 
     "claim_fts": """
@@ -146,7 +151,8 @@ SCHEMA_V1 = {
 
 
 # Migration from v0.1 alpha: add trust_tier column to claim_units,
-# convert digest_history.promoted to state, add relation tables
+# convert digest_history.promoted to state, add relation tables,
+# C1: remove content_hash UNIQUE, add partial unique index for active claims
 MIGRATIONS = {
     1: """
         ALTER TABLE claim_units ADD COLUMN trust_tier TEXT NOT NULL DEFAULT 'untrusted'
@@ -218,5 +224,34 @@ MIGRATIONS = {
         );
         ALTER TABLE resonance_log ADD COLUMN retention_mode TEXT DEFAULT 'full'
             CHECK(retention_mode IN ('full', 'minimal', 'none'));
+    """,
+    # C1: Replace content_hash UNIQUE with partial unique index (active claims only)
+    8: """
+        PRAGMA foreign_keys=OFF;
+        CREATE TABLE claim_units_v2 (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            content_hash TEXT,
+            fact_refs TEXT DEFAULT '[]',
+            source_type TEXT DEFAULT 'manual',
+            source_pointer TEXT NOT NULL,
+            trust_tier TEXT NOT NULL DEFAULT 'untrusted'
+                CHECK(trust_tier IN ('operator', 'verified', 'derived', 'untrusted')),
+            first_encoded TEXT NOT NULL DEFAULT (datetime('now')),
+            last_touched TEXT NOT NULL DEFAULT (datetime('now')),
+            reinforcement_count INTEGER DEFAULT 0,
+            emotional_markers TEXT DEFAULT '[]',
+            is_valid INTEGER DEFAULT 1,
+            valid_from TEXT,
+            valid_until TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO claim_units_v2 SELECT * FROM claim_units;
+        DROP TABLE claim_units;
+        ALTER TABLE claim_units_v2 RENAME TO claim_units;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_claim_content_hash_active
+            ON claim_units(content_hash) WHERE is_valid = 1;
+        PRAGMA foreign_keys=ON;
     """,
 }

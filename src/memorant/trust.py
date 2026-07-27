@@ -133,16 +133,6 @@ def redact_content(content: str) -> str:
         # if so, skip redaction for that specific match.
         # Patterns without capture groups skip the benign check.
         def _safe_replacement(m):
-            # Check group(1) (the captured secret value) for benign terms
-            try:
-                secret = m.group(1)
-            except IndexError:
-                secret = None
-
-            if secret is not None:
-                lower_secret = secret.lower()
-                if any(term in lower_secret for term in _BENIGN_TERMS):
-                    return m.group(0)  # Don't redact — benign in the secret value
             return replacement_fn(m)
 
         result = pattern.sub(_safe_replacement, result)

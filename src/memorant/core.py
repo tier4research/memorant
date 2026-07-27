@@ -305,6 +305,13 @@ class MemorantStore:
         explicit_trust_tier = trust_tier is not None
         if trust_tier is None:
             trust_tier = assign_trust(self.config.trust_policy, source_type, source_pointer)
+        else:
+            # M1: validate explicit trust_tier before INSERT (clearer error than SQLite CHECK)
+            valid_tiers = {"operator", "verified", "derived", "untrusted"}
+            if trust_tier not in valid_tiers:
+                raise ValueError(
+                    f"Invalid trust_tier {trust_tier!r}. Must be one of: {sorted(valid_tiers)}"
+                )
 
         fact_refs = _coerce_string_list(fact_refs)
         emotional_markers = _coerce_string_list(emotional_markers)
@@ -328,7 +335,7 @@ class MemorantStore:
             except sqlite3.IntegrityError:
                 # Duplicate content_hash — increment existing
                 existing = db.execute(
-                    "SELECT id FROM claim_units WHERE content_hash = ?",
+                    "SELECT id FROM claim_units WHERE content_hash = ? AND is_valid = 1",
                     (chash,),
                 ).fetchone()
                 if existing:

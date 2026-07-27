@@ -1,0 +1,14 @@
+{
+  "entities": [
+    {"id": "e1", "name": "Miguel", "entity_type": "person", "description": "developer and manager"},
+    {"id": "e2", "name": "Tier4IT", "entity_type": "organization", "description": "technology company"},
+    {"id": "e3", "name": "Python", "entity_type": "tool", "description": "programming language"}
+  ],
+  "relations": [
+    {"source": "Miguel", "target": "Tier4IT", "relation": "manages", "confidence": 0.92},
+    {"source": "Miguel", "target": "Python", "relation": "uses", "confidence": 0.85}
+  ],
+  "prompt_version": "v1",
+  "raw_response": "{\"entities\": [...], \"relations\": [...]}",
+  "cost_usd": 0.0012
+}
