@@ -7,12 +7,17 @@
 
 **Agent memory that knows where every fact came from — one SQLite file, zero dependencies.**
 
-Memorant stores what your agent knows as individual **claims**. Each claim records its
+Memorant is an open-source Python library that stores an AI agent's long-term memory as
+individual claims in a single SQLite database, each tagged with its source, a trust tier,
+and a validity window — with no vector database, embedding model, or external service
+required.
+
+Memorant stores what your agent knows as individual **claims**.
 source, how far you trust that source, and the window of time it was true. When a fact
 turns out to be wrong, you correct *that claim*: Memorant invalidates the old version,
 links the two, and flags everything derived from it for review.
 
-It installs on a bare Python interpreter. No embedding model, no vector server, no GPU,
+Memorant installs on a bare Python interpreter. No embedding model, no vector server, no GPU,
 no 400 MB dependency tree — SQLite with FTS5 and the standard library.
 
 ```bash
@@ -303,6 +308,34 @@ Pull requests and discussion are welcome.
 308 tests, 90%+ coverage on the migration, correction, trust, and redaction paths.
 Not yet benchmarked against vector-based memory systems.
 Deferred to v1.1: embedding backend, advanced policy config, repair workflows.
+
+---
+
+## FAQ
+
+### What is Memorant?
+Memorant is an open-source Python library that stores AI agent memory as individual claims in a single SQLite file, each with provenance, a trust tier, and a validity window. It runs entirely locally and requires no external services.
+
+### Does Memorant need a vector database or an embedding model?
+No. Memorant uses SQLite's built-in FTS5 full-text index for retrieval. There are no required pip dependencies, no embedding model, and no GPU.
+
+### How is Memorant different from Mem0, Zep, or Letta?
+Those systems focus on storing and retrieving memory at scale, generally backed by a vector store and often a hosted service. Memorant focuses on the trustworthiness of each stored fact — where it came from, whether it's still valid, and what happens to downstream memories when it turns out to be wrong.
+
+### Can you delete or correct a wrong memory in Memorant?
+Yes. `correct_claim()` invalidates the original claim, creates the corrected version, records a `corrects` relation between them, and flags any claim derived from the original for review — atomically, in one transaction.
+
+### What are trust tiers?
+Four levels — `operator`, `verified`, `derived`, `untrusted` — assigned by provenance policy rather than by fact-checking. Background context injection draws only from the top two tiers, so a model's earlier guess stays searchable but never resurfaces as established fact.
+
+### Does Memorant work offline?
+Yes. The core library never makes a network call and never invokes an LLM. The optional `memorant-ontology` worker does call a model, but it's opt-in and runs off the hot path.
+
+### What Python versions does Memorant support?
+Python 3.10 and later. `pip install memorant` installs no transitive dependencies.
+
+### Is Memorant production-ready?
+It's a release candidate (v1.0.0-rc.1) with 308 passing tests and 90%+ coverage on the migration, correction, trust, and redaction paths. APIs are stable with minor changes expected before 1.0. It has not yet been benchmarked against vector-based memory systems.
 
 ---
 

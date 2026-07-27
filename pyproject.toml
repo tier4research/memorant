@@ -5,19 +5,37 @@ build-backend = "hatchling.build"
 [project]
 name = "memorant"
 version = "1.0.0-rc.1"
-description = "Trust-tiered memory suite for AI agents: claims with provenance, recoverable context compression, and behavioral expectation tracking."
+description = "Local-first agent memory without a vector database — claims, provenance, trust tiers, and atomic corrections in one SQLite file."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 authors = [{name = "Tier 4 Research"}]
-keywords = ["ai", "agents", "memory", "sqlite", "trust", "retrieval", "resonance"]
+keywords = [
+    "agent-memory", "llm", "llm-memory", "ai-agents", "local-first",
+    "sqlite", "fts5", "provenance", "rag", "knowledge-base",
+    "long-term-memory", "zero-dependency",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database :: Database Engines/Servers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/tier4research/memorant"
+Documentation = "https://github.com/tier4research/memorant#readme"
+Source = "https://github.com/tier4research/memorant"
+Changelog = "https://github.com/tier4research/memorant/blob/master/RELEASE_NOTES.md"
+Issues = "https://github.com/tier4research/memorant/issues"
 
 [project.optional-dependencies]
 embeddings = ["sentence-transformers>=3.0", "numpy>=1.24"]
