@@ -16,7 +16,7 @@ def patch_text(content: str) -> str:
         "- write_path: use the Memorant claim_units write path; log durable retrieval/write effects through resonance_log.",
     )
     content = content.replace(
-        "- audit_call: log_audit(actor='elle', action='ingest', target_type='fact', target_id=fact_id, reason='why this belongs in memory').",
+        "- audit_call: log_audit(actor='agent', action='ingest', target_type='fact', target_id=fact_id, reason='why this belongs in memory').",
         "- resonance_log: record why durable memory was retrieved or written when the calling workflow supports it.",
     )
     return content

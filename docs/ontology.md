@@ -69,7 +69,7 @@ memorant-ontology import-jsonl <path>          # Bulk load claims
 ### Windows Task Scheduler
 
 ```bash
-schtasks /Create /TN "memorant-ontology-drain" /SC MINUTE /MO 5 /TR "\"C:\Users\Admin\AppData\Local\Python\pythoncore-3.14-64\python.exe\" -m memorant_ontology.worker --db \"C:\Users\Admin\.mempalace\memorant_v1.db\" --limit 10 --rpm 30"
+schtasks /Create /TN "memorant-ontology-drain" /SC MINUTE /MO 5 /TR "\"C:\Python312\python.exe\" -m memorant_ontology.worker --db \"C:\mempalace\memorant_v1.db\" --limit 10 --rpm 30"
 ```
 
 ### Linux/VPS (crontab)

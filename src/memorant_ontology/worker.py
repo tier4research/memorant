@@ -6,12 +6,15 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
 
 from .config import OntologyConfig
 from .store import OntologyStore
+
+logger = logging.getLogger(__name__)
 
 
 def run_worker(db_path: str, limit: int = 10, rpm: int = 30) -> None:
@@ -49,6 +52,7 @@ def run_worker(db_path: str, limit: int = 10, rpm: int = 30) -> None:
     extractor = OntologyExtractor(store)
     processed = 0
     total_cost = 0.0
+    consecutive_failures = 0
 
     for _ in range(limit):
         # Check if ontology is disabled for this database
@@ -78,6 +82,9 @@ def run_worker(db_path: str, limit: int = 10, rpm: int = 30) -> None:
 
             if not claim:
                 fail(store, queue_id, "Claim not found", config.max_attempts)
+                # Still delay on failure to avoid hammering the queue
+                time.sleep(delay * _backoff_multiplier(consecutive_failures))
+                consecutive_failures += 1
                 continue
 
             # Extract
@@ -85,18 +92,32 @@ def run_worker(db_path: str, limit: int = 10, rpm: int = 30) -> None:
             cost = result.get("cost_usd", 0.0)
             total_cost += cost
 
+            # Record cost immediately — if _write_results fails, the spend is
+            # still tracked in the daily budget (the cost_usd column is updated
+            # again in complete() on success).
+            with store.connect() as db:
+                db.execute(
+                    "UPDATE memorant_ontology_queue SET cost_usd = ? WHERE id = ?",
+                    (cost, queue_id),
+                )
+                db.commit()
+
             # Write results
             _write_results(store, claim_id, result, config, claim["trust_tier"])
 
             # Mark complete
             complete(store, queue_id, cost)
             processed += 1
-
-            # Rate limit
-            time.sleep(delay)
+            consecutive_failures = 0
 
         except Exception as exc:
+            logger.exception("Worker failed processing queue_id=%s claim_id=%s: %s", queue_id, claim_id, exc)
             fail(store, queue_id, repr(exc), config.max_attempts)
+            consecutive_failures += 1
+        finally:
+            # Rate limit applies regardless of success/failure — failing fast
+            # on a broken provider without delay burns through the retry budget.
+            time.sleep(delay * _backoff_multiplier(consecutive_failures))
 
     # Sweep dead letter
     from .queue import sweep_dead_letter
@@ -118,6 +139,20 @@ def _get_daily_cost(store: OntologyStore) -> float:
             "WHERE completed_at > datetime('now', '-24 hours')"
         ).fetchone()
     return float(row["total"])
+
+
+def _backoff_multiplier(consecutive_failures: int, base_delay: float = 1.0, cap: float = 30.0) -> float:
+    """Exponential backoff multiplier for failure bursts.
+
+    Returns a multiplier such that effective delay = base * multiplier.
+    At 0 failures: 1.0 (no backoff).
+    At 1 failure: ~2.0
+    At N failures: min(2**N, cap/base).
+    """
+    if consecutive_failures <= 0:
+        return 1.0
+    multiplier = min(2 ** consecutive_failures, cap / max(base_delay, 0.001))
+    return multiplier
 
 
 def _write_results(
@@ -220,9 +255,10 @@ def _write_results(
                 src_id = entity_id_map.get(src_norm)
                 tgt_id = entity_id_map.get(tgt_norm)
                 if src_id and tgt_id and rel:
-                    check_contradictions(store, src_id, rel, tgt_id, config)
+                    check_contradictions(store, src_id, rel, tgt_id, config, db=db)
         except Exception:
-            pass  # contradiction check must never break _write_results
+            logger.exception("Contradiction check failed for claim %s — continuing", claim_id)
+            # contradiction check must never break _write_results
 
         # Mark claim as processed
         db.execute(

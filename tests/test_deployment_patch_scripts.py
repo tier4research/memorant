@@ -14,7 +14,7 @@ def test_fix_resonance_log_key_removes_audit_guidance(tmp_path: Path) -> None:
                 "status.get('audit_log')",
                 "status['audit_log']",
                 '"- write_path: import sys; sys.path.insert(0, \'/opt/data/palace_upgrade\'); from palace.ingest import ingest_fact; from palace.audit import log_audit.",',
-                '"- audit_call: log_audit(actor=\'elle\', action=\'ingest\', target_type=\'fact\', target_id=fact_id, reason=\'why this belongs in memory\').",',
+                '"- audit_call: log_audit(actor=\'agent\', action=\'ingest\', target_type=\'fact\', target_id=fact_id, reason=\'why this belongs in memory\').",',
             ]
         )
     )

@@ -1,6 +1,6 @@
 # Memorant
 
-[![Tests](https://img.shields.io/badge/tests-308%20passing-brightgreen)](https://github.com/tier4research/memorant/actions/workflows/tests.yml)
+[![Tests](https://img.shields.io/badge/tests-490%20passing-brightgreen)](https://github.com/tier4research/memorant/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Status: RC](https://img.shields.io/badge/status-rc-yellow.svg)](RELEASE_NOTES.md)
@@ -12,7 +12,7 @@ individual claims in a single SQLite database, each tagged with its source, a tr
 and a validity window — with no vector database, embedding model, or external service
 required.
 
-Memorant stores what your agent knows as individual **claims**.
+Memorant stores what your agent knows as individual **claims**. Each claim records its
 source, how far you trust that source, and the window of time it was true. When a fact
 turns out to be wrong, you correct *that claim*: Memorant invalidates the old version,
 links the two, and flags everything derived from it for review.
@@ -190,12 +190,12 @@ The three packages work together for end-to-end agent memory governance:
 ```python
 from memorant import MemorantStore
 from memorant.suite import MemoryCycle
-from hermes_context_tuner import ContextTunerEngine
+from context_tuner import ContextTuner
 from expectation_ledger import ExpectationLedger
 
 cycle = MemoryCycle(
     memory=MemorantStore("memory.db"),
-    tuner=ContextTunerEngine("context.db"),
+    tuner=ContextTuner("context.db"),
     ledger=ExpectationLedger("expectations.db"),
 )
 
@@ -230,11 +230,9 @@ Key features:
 - **Relationship discovery** — builds a knowledge graph of how entities relate
 - **Trust propagation** — entities inherit trust tiers from source claims
 - **Contradiction detection** — flags claims that conflict with existing knowledge
-- **Cost control** — per-claim cost tracking with daily hard stop ($5/day default)
+| **Cost control** — per-claim cost tracking with daily hard stop ($5/day default) |
 
-236 tests passing across the extraction, worker, queue, retriever, and normalizer modules.
 
----
 
 ## Comparison
 
@@ -293,7 +291,7 @@ Fail-closed: wrong key → can't open. No key → standard SQLite. Zero overhead
 ## Evaluation
 
 No comparative benchmark against vector-based memory systems yet — planned before v1.0.
-The project's 308 unit tests (90%+ coverage on migration, correction, trust, and
+The project's 490 unit tests (90%+ coverage on migration, correction, trust, and
 redaction paths) verify correctness, but they say nothing about whether claim-based
 memory produces better answers than vector RAG in practice. A 50-question benchmark
 with deliberately poisoned stale facts is the next priority.
@@ -305,7 +303,7 @@ Pull requests and discussion are welcome.
 ## Project status
 
 **Release candidate** (v1.0.0-rc.1). APIs are stable; expect minor adjustments before 1.0.
-308 tests, 90%+ coverage on the migration, correction, trust, and redaction paths.
+490 tests, 90%+ coverage on the migration, correction, trust, and redaction paths.
 Not yet benchmarked against vector-based memory systems.
 Deferred to v1.1: embedding backend, advanced policy config, repair workflows.
 
@@ -335,7 +333,7 @@ Yes. The core library never makes a network call and never invokes an LLM. The o
 Python 3.10 and later. `pip install memorant` installs no transitive dependencies.
 
 ### Is Memorant production-ready?
-It's a release candidate (v1.0.0-rc.1) with 308 passing tests and 90%+ coverage on the migration, correction, trust, and redaction paths. APIs are stable with minor changes expected before 1.0. It has not yet been benchmarked against vector-based memory systems.
+It's a release candidate (v1.0.0-rc.1) with 490 passing tests and 90%+ coverage on the migration, correction, trust, and redaction paths. APIs are stable with minor changes expected before 1.0. It has not yet been benchmarked against vector-based memory systems.
 
 ---
 

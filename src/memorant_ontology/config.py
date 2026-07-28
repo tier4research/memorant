@@ -2,9 +2,77 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Literal
+
+
+# Map of OntologyConfig field -> environment variable name
+_ENV_VAR_MAP: dict[str, str] = {
+    "enabled": "ONTOLOGY_ENABLED",
+    "provider": "ONTOLOGY_PROVIDER",
+    "model": "ONTOLOGY_MODEL",
+    "timeout_seconds": "ONTOLOGY_TIMEOUT",
+    "max_attempts": "ONTOLOGY_MAX_ATTEMPTS",
+    "provider_rpm": "ONTOLOGY_RPM",
+    "lease_seconds": "ONTOLOGY_LEASE_SECONDS",
+    "queue_max_pending": "ONTOLOGY_QUEUE_MAX_PENDING",
+    "prune_after_days": "ONTOLOGY_PRUNE_AFTER_DAYS",
+    "max_cost_usd_per_day": "ONTOLOGY_DAILY_COST_CAP",
+    "alert_failed_threshold": "ONTOLOGY_ALERT_FAILED_THRESHOLD",
+    "prompt_version": "ONTOLOGY_PROMPT_VERSION",
+    "trust_propagation": "ONTOLOGY_TRUST_PROPAGATION",
+    "resonance_integration": "ONTOLOGY_RESONANCE_ENABLED",
+    "redact_pii": "ONTOLOGY_REDACT_PII",
+    "dead_letter_path": "ONTOLOGY_DEAD_LETTER_PATH",
+}
+
+
+def _parse_bool(v: str) -> bool:
+    """Parse a string as a boolean."""
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_string_list(v: str) -> list[str]:
+    """Parse a comma-separated string into a list of trimmed strings."""
+    return [x.strip() for x in v.split(",") if x.strip()]
+
+
+def _apply_env_overrides(kwargs: dict) -> None:
+    """Mutate *kwargs* with values from matching environment variables.
+
+    Type inference: for fields whose current value is bool, use _parse_bool;
+    for fields whose current value is float, use float(); for int, int();
+    for str, str().
+    """
+    for field_name, env_var in _ENV_VAR_MAP.items():
+        raw = os.environ.get(env_var)
+        if raw is None:
+            continue
+        current = kwargs.get(field_name)
+        if current is None:
+            default_value = getattr(OntologyConfig, field_name, None)
+            if isinstance(default_value, bool) or field_name == "enabled":
+                kwargs[field_name] = _parse_bool(raw)
+            elif isinstance(default_value, float):
+                kwargs[field_name] = float(raw)
+            elif isinstance(default_value, int):
+                kwargs[field_name] = int(raw)
+            elif isinstance(default_value, (list, tuple)):
+                kwargs[field_name] = _parse_string_list(raw)
+            else:
+                kwargs[field_name] = raw
+        elif isinstance(current, bool):
+            kwargs[field_name] = _parse_bool(raw)
+        elif isinstance(current, float):
+            kwargs[field_name] = float(raw)
+        elif isinstance(current, int):
+            kwargs[field_name] = int(raw)
+        elif isinstance(current, (list, tuple)):
+            kwargs[field_name] = _parse_string_list(raw)
+        else:
+            kwargs[field_name] = raw
 
 
 @dataclass(frozen=True)
@@ -46,7 +114,13 @@ class OntologyConfig:
     dead_letter_path: str = ""  # default: <db_path>.dead-letter.jsonl
 
     def __post_init__(self) -> None:
-        """Validate allowlists and cross-field constraints."""
+        """Apply env-var overrides, then validate allowlists and cross-field constraints.
+
+        Uses object.__setattr__ to bypass the frozen-dataclass guard.
+        """
+        # Apply environment variable overrides (ONTOLOGY_MODEL, ONTOLOGY_DAILY_COST_CAP, etc.)
+        _apply_env_overrides(self.__dict__)
+
         for name in ("entity_types_allowed", "relations_allowed", "functional_relations"):
             value = getattr(self, name)
             if not isinstance(value, (list, tuple)):

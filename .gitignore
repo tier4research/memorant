@@ -19,3 +19,11 @@ _audit_*.py
 memorant.dead-letter.jsonl
 kimi27fixreport.md
 deepseekreport.md
+
+# Internal planning/report artifacts — not for public release
+plans/
+reports/
+references/_glm*
+references/glm*
+references/claude-*
+references/architecture-*

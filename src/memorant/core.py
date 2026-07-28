@@ -1014,11 +1014,19 @@ class MemorantStore:
 
     def doctor(self, json_output: bool = False) -> int:
         """Run health checks per the Agent Integrity doctor contract."""
+        def _probe_connection() -> bool:
+            try:
+                with self.connect() as db:
+                    db.execute("SELECT 1")
+                return True
+            except Exception:
+                return False
+
         checks = [
-            run_check("database_connection", lambda: (True, "connected")),
+            run_check("database_connection", lambda ok=_probe_connection(): (ok, "connected" if ok else "cannot open database")),
             run_check(
                 "database_integrity",
-                lambda: (self.integrity_check(), "ok" if self.integrity_check() else "corrupt"),
+                lambda ok=self.integrity_check(): (ok, "ok" if ok else "corrupt"),
                 degraded_on_error=False,
             ),
             run_check(
@@ -1029,7 +1037,7 @@ class MemorantStore:
                 ),
             ),
         ]
-        return doctor_main("memorant", "1.0.0", checks, json_output=json_output)
+        return doctor_main("memorant", COMPONENT_VERSION, checks, json_output=json_output)
 
     # ── Stats ─────────────────────────────────────────────────
 

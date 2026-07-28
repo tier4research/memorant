@@ -13,7 +13,6 @@ from .trust import TrustPolicy
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="memorant", description="Memorant v1 CLI")
-    p.add_argument("--db", default="./memorant.db", help="Database path")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # init
@@ -149,6 +148,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("ident")
     sp.add_argument("--reason", default="rejected by review")
     sp.set_defaults(func=cmd_digest_reject)
+
+    # Add --db to every subparser so it works both before and after the subcommand
+    for action in sub._group_actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for choice_parser in action.choices.values():
+                choice_parser.add_argument("--db", default="./memorant.db", help="Database path")
 
     return p
 

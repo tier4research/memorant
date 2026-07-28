@@ -6,11 +6,15 @@ Multi-valued relations (e.g., "uses") do not trigger contradiction review.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .config import OntologyConfig
     from .store import OntologyStore
+
+logger = logging.getLogger(__name__)
 
 
 def check_contradictions(
@@ -19,6 +23,7 @@ def check_contradictions(
     relation: str,
     target_entity_id: str,
     config: "OntologyConfig",
+    db: sqlite3.Connection | None = None,
 ) -> bool:
     """Check if a new relation contradicts existing functional relations.
 
@@ -26,12 +31,19 @@ def check_contradictions(
     For functional relations (e.g., located_in, is_a), if the source entity
     already has a different target for the same relation, a review row is created.
 
+    Pass *db* to reuse an existing connection (avoids nested-WAL-writer deadlock
+    when called from within an open write transaction). When db is provided,
+    the caller is responsible for committing.
+
     Returns True if a contradiction review was created.
     """
     if relation not in config.functional_relations:
         return False
 
-    with store.connect() as db:
+    should_close = db is None
+    if db is None:
+        db = store.connect()
+    try:
         # Find existing valid relations with same source and relation type
         existing = db.execute(
             """
@@ -62,8 +74,10 @@ def check_contradictions(
                 ),
             )
         db.commit()
-
-    return True
+        return True
+    finally:
+        if should_close:
+            db.close()
 
 
 def check_contradictions_for_relation(

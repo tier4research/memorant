@@ -103,10 +103,15 @@ class OntologyExtractor:
             text = response.choices[0].message.content or ""
             cost = 0.0
             if hasattr(response, "usage") and response.usage:
-                # Estimate cost from token counts
-                prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
-                completion_tokens = getattr(response.usage, "completion_tokens", 0)
-                cost = (prompt_tokens * 0.000001 + completion_tokens * 0.000002)
+                # Use litellm's built-in cost calculator for accurate pricing
+                try:
+                    cost = litellm.completion_cost(response)
+                except Exception:
+                    # Fallback: estimate from token counts if litellm can't
+                    # determine the model's cost (e.g., custom provider).
+                    prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
+                    completion_tokens = getattr(response.usage, "completion_tokens", 0)
+                    cost = (prompt_tokens * 0.000001 + completion_tokens * 0.000002)
             return text, cost
         except ImportError as exc:
             # litellm not installed — extraction cannot proceed
