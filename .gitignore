@@ -27,3 +27,11 @@ references/_glm*
 references/glm*
 references/claude-*
 references/architecture-*
+references/patch*
+references/remediation*
+
+# Private infra files
+scripts/archive/
+scripts/patch_*
+*.report.md
+AUDIT_*.md
