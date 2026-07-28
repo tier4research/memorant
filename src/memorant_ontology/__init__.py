@@ -250,4 +250,4 @@ def patch_memorant_store(config: "OntologyConfig | None" = None) -> None:
 
 
 __all__ = ["patch_memorant_store"]
-__version__ = "1.0.0-rc.1"
+__version__ = "1.0.0-rc.3"

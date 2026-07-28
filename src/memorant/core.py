@@ -42,7 +42,7 @@ from .schema import SCHEMA_V1, MIGRATIONS
 RESONANCE_DEADLINE_MS = 100
 RESONANCE_COOLDOWN_MS = 5000
 MAX_RESONANCE_LINES = 3
-COMPONENT_VERSION = "1.0.0-rc.1"
+COMPONENT_VERSION = "1.0.0-rc.3"
 
 # ── Helpers ────────────────────────────────────────────────────────
 

@@ -44,6 +44,6 @@ class TestOntologyConfigValidation:
         """NEW: memorant_ontology.__version__ matches pyproject.toml target."""
         from memorant_ontology import __version__
         # Should be a semver-compatible string, not the old "0.1.0"
-        assert __version__ == "1.0.0-rc.1"
+        assert __version__ == "1.0.0-rc.3"
         # Verify it's not the stale version
         assert __version__ != "0.1.0"

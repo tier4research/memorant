@@ -30,7 +30,7 @@ from .schema import SCHEMA_V1, MIGRATIONS
 
 # ── Constants ──────────────────────────────────────────────────────
 
-COMPONENT_VERSION = "1.0.0-rc.1"
+COMPONENT_VERSION = "1.0.0-rc.3"
 
 
 # ── Helpers ────────────────────────────────────────────────────────

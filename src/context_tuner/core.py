@@ -36,7 +36,7 @@ from .schema import SCHEMA_V1, MIGRATIONS
 
 # ── Constants ──────────────────────────────────────────────────
 
-COMPONENT_VERSION = "1.0.0-rc.1"
+COMPONENT_VERSION = "1.0.0-rc.3"
 DEFAULT_MAX_TOKENS = 8000
 DEFAULT_COMPRESSION_RATIO = 0.5
 DEFAULT_KEEP_LAST_N = 3
